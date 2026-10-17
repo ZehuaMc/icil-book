@@ -1,0 +1,10 @@
+ users | seats | sessions
+-------+-------+----------
+     3 |    24 |       21
+(1 row)
+
+          indexname
+-----------------------------
+ Reservation_active_seat_key
+ Reservation_active_user_key
+(2 rows)

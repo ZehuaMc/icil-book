@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { chromium } from 'playwright';
+import { mkdir } from 'node:fs/promises';
+const baseURL = process.env.SMOKE_BASE_URL ?? 'http://localhost:3100';
+const secure = new URL(baseURL).protocol === 'https:';
+assert.ok(process.env.SEED_PASSWORD, '需要部署环境 SEED_PASSWORD');
+const browser = await chromium.launch();
+const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: secure });
+try {
+    const page = await context.newPage();
+    await page.goto('/login');
+    await page.getByLabel('邮箱').fill('admin@station.local');
+    await page.getByLabel('密码').fill(process.env.SEED_PASSWORD);
+    await page.getByRole('button', { name: '登录空间' }).click();
+    await page.getByRole('heading', { name: /找到你的好位置/ }).waitFor();
+    const cookie = (await context.cookies()).find(c => c.name === 'station_session');
+    assert.ok(cookie?.httpOnly);
+    assert.equal(cookie.sameSite, 'Lax');
+    assert.equal(cookie.secure, secure);
+    assert.equal((await page.request.get('/api/health')).status(), 200);
+    assert.equal((await page.request.post('/api/admin/courses', { headers: { Origin: 'https://untrusted.example' }, data: { name: '不应创建', instructor: '不应创建' } })).status(), 403);
+    await page.goto('/admin');
+    await page.getByRole('heading', { name: /空间管理概览/ }).waitFor();
+    await mkdir('reports', { recursive: true });
+    await page.screenshot({ path: `reports/deployment-${secure ? 'https' : 'http'}.png`, fullPage: true });
+    await page.getByRole('button', { name: '退出登录' }).click();
+    await page.getByRole('heading', { name: /给下一次灵感/ }).waitFor();
+    assert.equal((await page.request.get('/api/admin/users')).status(), 401);
+    console.log(`PASS ${baseURL}: Chromium 登录、管理员页面、健康检查、跨站拒绝、Cookie Secure=${secure}、注销`);
+} finally { await context.close(); await browser.close(); }

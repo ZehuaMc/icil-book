@@ -1,0 +1,110 @@
+ Image teaching-station:local Building
+#1 [internal] load local bake definitions
+#1 reading from stdin 521B done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 761B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/node:22-bookworm-slim
+#3 DONE 0.9s
+
+#4 [internal] load .dockerignore
+#4 transferring context: 193B done
+#4 DONE 0.0s
+
+#5 [base 1/3] FROM docker.io/library/node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392
+#5 resolve docker.io/library/node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 0.0s done
+#5 DONE 0.0s
+
+#6 [internal] load build context
+#6 transferring context: 61.40kB done
+#6 DONE 0.0s
+
+#7 [base 2/3] RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+#7 CACHED
+
+#8 [build 1/4] COPY package.json package-lock.json ./
+#8 CACHED
+
+#9 [base 3/3] WORKDIR /app
+#9 CACHED
+
+#10 [build 2/4] RUN npm ci --no-audit --no-fund
+#10 CACHED
+
+#11 [build 3/4] COPY . .
+#11 DONE 0.1s
+
+#12 [build 4/4] RUN npm run build
+#12 0.307
+#12 0.307 > teaching-station-reservations@1.0.0 build
+#12 0.307 > prisma generate && next build
+#12 0.307
+#12 1.211 Prisma schema loaded from prisma/schema.prisma
+#12 1.519
+#12 1.519 ✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 135ms
+#12 1.519
+#12 1.519 Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+#12 1.519
+#12 1.519 Tip: Want to turn off tips and other hints? https://pris.ly/tip-4-nohints
+#12 1.519
+#12 2.375    ▲ Next.js 15.5.28
+#12 2.375    - Experiments (use with caution):
+#12 2.375      · cpus: 2
+#12 2.375
+#12 2.404    Creating an optimized production build ...
+#12 10.08  ✓ Compiled successfully in 5.3s
+#12 10.08    Linting and checking validity of types ...
+#12 14.57    Collecting page data ...
+#12 15.72    Generating static pages (0/3) ...
+#12 16.09  ✓ Generating static pages (3/3)
+#12 16.81    Finalizing page optimization ...
+#12 16.81    Collecting build traces ...
+#12 24.17
+#12 24.17 Route (app)                                 Size  First Load JS
+#12 24.17 ┌ ○ /_not-found                            991 B         104 kB
+#12 24.17 ├ ƒ /[[...page]]                           24 kB         127 kB
+#12 24.17 └ ƒ /api/[...path]                         122 B         103 kB
+#12 24.17 + First Load JS shared by all             103 kB
+#12 24.17   ├ chunks/255-b1e2483a7e02feee.js       46.6 kB
+#12 24.17   ├ chunks/4bd1b696-c023c6e3521b1417.js  54.2 kB
+#12 24.17   └ other shared chunks (total)          1.92 kB
+#12 24.17
+#12 24.17
+#12 24.17 ○  (Static)   prerendered as static content
+#12 24.17 ƒ  (Dynamic)  server-rendered on demand
+#12 24.17
+#12 DONE 24.3s
+
+#13 [runtime 1/5] COPY --from=build --chown=node:node /app/node_modules ./node_modules
+#13 CACHED
+
+#14 [runtime 2/5] COPY --from=build --chown=node:node /app/.next ./.next
+#14 DONE 0.1s
+
+#15 [runtime 3/5] COPY --from=build --chown=node:node /app/package.json /app/next.config.ts ./
+#15 DONE 0.1s
+
+#16 [runtime 4/5] COPY --from=build --chown=node:node /app/prisma ./prisma
+#16 DONE 0.1s
+
+#17 [runtime 5/5] COPY --from=build --chown=node:node /app/src/lib ./src/lib
+#17 DONE 0.1s
+
+#18 exporting to image
+#18 exporting layers
+#18 exporting layers 1.4s done
+#18 exporting manifest sha256:2ea26060fb2bcf628c4ff6f837fe5a9c4f4b485d2ee6f6730818f98b1ea66454 0.0s done
+#18 exporting config sha256:4e0d0282f459f726cb5be621ffc4237ed7a3fe35a6d2aa48581fa106f3414497 0.0s done
+#18 exporting attestation manifest sha256:9b93a6c158a84d122af63550f83c4181ab8ca53c7fe5465be6b072446cfe098c 0.0s done
+#18 exporting manifest list sha256:73488083c5e77ffb4a3c0e651a507d065df167df65e2a5af47a78e3c000e279a 0.0s done
+#18 naming to docker.io/library/teaching-station:local done
+#18 unpacking to docker.io/library/teaching-station:local
+#18 unpacking to docker.io/library/teaching-station:local 0.4s done
+#18 DONE 1.9s
+
+#19 resolving provenance for metadata file
+#19 DONE 0.0s
+ Image teaching-station:local Built

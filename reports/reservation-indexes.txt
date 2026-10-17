@@ -1,0 +1,8 @@
+            indexname             |                                                                  indexdef
+----------------------------------+---------------------------------------------------------------------------------------------------------------------------------------------
+ Reservation_active_seat_key      | CREATE UNIQUE INDEX "Reservation_active_seat_key" ON public."Reservation" USING btree ("sessionId", "seatId") WHERE ("cancelledAt" IS NULL)
+ Reservation_active_user_key      | CREATE UNIQUE INDEX "Reservation_active_user_key" ON public."Reservation" USING btree ("sessionId", "userId") WHERE ("cancelledAt" IS NULL)
+ Reservation_pkey                 | CREATE UNIQUE INDEX "Reservation_pkey" ON public."Reservation" USING btree (id)
+ Reservation_sessionId_seatId_idx | CREATE INDEX "Reservation_sessionId_seatId_idx" ON public."Reservation" USING btree ("sessionId", "seatId")
+ Reservation_sessionId_userId_idx | CREATE INDEX "Reservation_sessionId_userId_idx" ON public."Reservation" USING btree ("sessionId", "userId")
+(5 rows)

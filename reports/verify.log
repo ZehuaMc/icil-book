@@ -1,0 +1,228 @@
+
+> teaching-station-reservations@1.0.0 verify
+> node --env-file-if-exists=.env.test scripts/verify.mjs
+
+
+>>> db:generate
+
+> teaching-station-reservations@1.0.0 db:generate
+> prisma generate
+
+Prisma schema loaded from prisma/schema.prisma
+
+✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 170ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+
+>>> db:validate
+
+> teaching-station-reservations@1.0.0 db:validate
+> prisma validate
+
+Prisma schema loaded from prisma/schema.prisma
+The schema at prisma/schema.prisma is valid 🚀
+
+>>> db:migrate
+
+> teaching-station-reservations@1.0.0 db:migrate
+> prisma migrate deploy
+
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": PostgreSQL database "station_test", schema "public" at "127.0.0.1:5433"
+
+1 migration found in prisma/migrations
+
+
+No pending migrations to apply.
+
+>>> db:seed
+
+> teaching-station-reservations@1.0.0 db:seed
+> node --env-file-if-exists=.env --import tsx prisma/seed.ts
+
+.env not found. Continuing without it.
+初始化完成：3 个角色账号、23 个可预约工位、未来 7 天课程。账号密码来自 SEED_PASSWORD。
+
+>>> typecheck
+
+> teaching-station-reservations@1.0.0 typecheck
+> tsc --noEmit
+
+
+>>> test
+
+> teaching-station-reservations@1.0.0 test
+> node --experimental-strip-types --test --experimental-test-isolation=none tests/rules.test.ts tests/request.test.ts tests/geometry.test.ts
+
+✔ 家具与座位完整尺寸必须留在画布内，允许边缘重合 (1.252372ms)
+✔ 旋转后的外接范围越界也拒绝，直角浮点误差不误拒边界 (0.250827ms)
+✔ 桌面连同座位拖动时整体限位，保留桌椅相对位置 (0.691587ms)
+✔ JSON 请求支持分块输入与中文多字节内容 (28.230984ms)
+✔ 缺少 Content-Length 时也拒绝超过 1 MB 的请求 (3.054657ms)
+✔ 伪造较小 Content-Length 无法绕过大小限制 (1.585471ms)
+✔ Content-Length 过大时在读取前拒绝 (0.698961ms)
+✔ 非 JSON、空请求与非法 UTF-8 返回 400 (1.485755ms)
+✔ 同源写请求和无 Origin 的客户端请求可通过，跨站写请求被拒绝 (1.595801ms)
+✔ 生产服务使用浏览器 Host 校验来源，兼容 Next 内部地址并拒绝跨站和不同端口 (0.873035ms)
+✔ 上海日期、分钟与星期，不依赖服务器时区 (12.36028ms)
+✔ 每周规则必须覆盖课程完整时段，边界可重合 (0.534926ms)
+✔ 无规则、规则不匹配或分组关闭时禁止预约 (0.377292ms)
+✔ 日期关闭规则覆盖每周允许规则 (0.212135ms)
+✔ 日期开放规则覆盖每周禁止，并严格限制窗口 (0.344642ms)
+✔ 存在日期规则时，不回退到每周规则 (0.18776ms)
+✔ 日期禁止窗口与课程相交时优先拒绝 (0.259142ms)
+✔ 允许课程在次日零点结束，跨日课程不误用单日规则 (0.280341ms)
+✔ 秒与毫秒不能越过权限窗口边界 (0.322641ms)
+✔ 跨日课程必须分别满足两天规则，日期覆盖规则不能被绕过 (0.524005ms)
+✔ 非法、反向、零长度及超过 24 小时的时段拒绝预约 (0.082894ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 21
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 115.593369
+
+>>> test:api
+
+> teaching-station-reservations@1.0.0 test:api
+> node --import tsx --test --experimental-test-isolation=none tests/api.test.ts
+
+✔ 当前用户接口在没有登录 Cookie 时返回 null (8.45437ms)
+✔ 后台、个人记录和写接口拒绝未登录请求 (4.332534ms)
+✔ 登录注册输入错误返回 400，不触及数据库 (7.871305ms)
+✔ 路由层对非法 JSON、跨站写入与过大流式请求返回对应错误 (3.439622ms)
+✔ 没有会话的退出请求可安全重复执行 (1.522385ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 248.256886
+
+>>> test:database
+
+> teaching-station-reservations@1.0.0 test:database
+> node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/database.test.ts
+
+.env not found. Continuing without it.
+✔ 空 schema 迁移、实际索引、模型一致性与重复初始化保留人工修改 (4362.383236ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 4455.455619
+
+>>> test:integration
+
+> teaching-station-reservations@1.0.0 test:integration
+> node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/integration.test.ts
+
+.env not found. Continuing without it.
+▶ PostgreSQL: coverage gates, authorization, cancellation, and concurrent uniqueness
+  ✔ no assistant means no booking; learner cannot register coverage (21.907684ms)
+  ✔ coverage does not consume seats and cannot be duplicated (20.300252ms)
+  ✔ a two-assistant threshold opens seats only after both register (67.677768ms)
+  ✔ a seat from a different published layout cannot be booked (13.893744ms)
+  ✔ same seat, different users: exactly one concurrent booking succeeds (65.646337ms)
+  ✔ one user cannot reserve a second seat; someone else cannot cancel (19.683614ms)
+  ✔ coverage cannot be removed once learners have booked (11.664935ms)
+  ✔ cancellation retains history and releases seat (53.160694ms)
+  ✔ same user, different seats: exactly one concurrent booking succeeds (41.209467ms)
+  ✔ racing coverage removal and booking never leaves an unstaffed reservation (44.651073ms)
+  ✔ disabled users and forbidden groups are rejected by service (19.397821ms)
+  ✔ database itself rejects duplicate active seat and user keys (25.559401ms)
+  ✔ ended sessions reject booking and cancellation (32.849333ms)
+✔ PostgreSQL: coverage gates, authorization, cancellation, and concurrent uniqueness (567.418098ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 674.327311
+
+>>> build
+
+> teaching-station-reservations@1.0.0 build
+> prisma generate && next build
+
+Prisma schema loaded from prisma/schema.prisma
+
+✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 118ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+   ▲ Next.js 15.5.28
+   - Experiments (use with caution):
+     · cpus: 2
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 2.3s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/3) ...
+ ✓ Generating static pages (3/3)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                 Size  First Load JS
+┌ ○ /_not-found                            993 B         104 kB
+├ ƒ /[[...page]]                           24 kB         127 kB
+└ ƒ /api/[...path]                         122 B         103 kB
++ First Load JS shared by all             103 kB
+  ├ chunks/255-b1e2483a7e02feee.js       46.6 kB
+  ├ chunks/4bd1b696-c023c6e3521b1417.js  54.2 kB
+  └ other shared chunks (total)          1.92 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+
+>>> test:e2e
+
+> teaching-station-reservations@1.0.0 test:e2e
+> node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test
+
+.env not found. Continuing without it.
+[WebServer] (node:39000) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 16 tests using 1 worker
+
+.env not found. Continuing without it.
+(node:39061) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/acceptance.spec.ts:64:1 › 并发创建重叠场次只成功一个，相邻时段允许 (232ms)
+  ✓   2 [chromium] › e2e/acceptance.spec.ts:71:1 › 最后管理员保护：两名管理员同时降级或禁用仍保留一名 (149ms)
+  ✓   3 [chromium] › e2e/acceptance.spec.ts:95:1 › 助教登记与降级/停用竞争不产生无效保障 (166ms)
+  ✓   4 [chromium] › e2e/acceptance.spec.ts:115:1 › 保存与发布竞争、复制版本后编辑保持旧场次布局稳定 (159ms)
+  ✓   5 [chromium] › e2e/acceptance.spec.ts:137:1 › 有预约场次锁定、关闭重开、管理员取消与失败事务日志 (343ms)
+  ✓   6 [chromium] › e2e/acceptance.spec.ts:162:1 › 已登录分组/角色立即生效，禁止分组仍可取消自己的旧预约 (189ms)
+  ✓   7 [chromium] › e2e/acceptance.spec.ts:174:1 › CSV 筛选、BOM、中文、引号换行及公式前缀转义 (179ms)
+  ✓   8 [chromium] › e2e/acceptance.spec.ts:191:1 › 真实 Cookie、会话过期/撤销、15 次限流与窗口重置 (342ms)
+  ✓   9 [chromium] › e2e/acceptance.spec.ts:228:1 › 布局输入拒绝重复编号、非法关联、尺寸和旋转越界 (132ms)
+  ✓  10 [chromium] › e2e/acceptance.spec.ts:246:1 › 后台表单：用户、分组规则、课程、场次、预约取消和日志 (2.7s)
+  ✓  11 [chromium] › e2e/acceptance.spec.ts:295:1 › 平板触屏和窄屏登录退出、座位键盘操作与确认框焦点 (1.2s)
+  ✓  12 [chromium] › e2e/acceptance.spec.ts:330:1 › 两个浏览器抢座刷新，失败可重试，取消后座位释放 (2.3s)
+  ✓  13 [chromium] › e2e/acceptance.spec.ts:368:1 › 布局画布拖动、缩放、尺寸旋转、多选编号与发布只读 (1.5s)
+  ✓  14 [chromium] › e2e/booking.spec.ts:17:1 › 注册 → 登录 → 助教保障 → 学员选座 → 管理员查看与导出 (6.0s)
+  ✓  15 [chromium] › e2e/booking.spec.ts:75:1 › 管理员编辑布局、发布与场次绑定，已发布版本不可修改 (1.9s)
+  ✓  16 [chromium] › e2e/booking.spec.ts:116:1 › 接口权限、默认分组、日期覆盖、账号停用及退出会话 (2.2s)
+
+  16 passed (21.8s)
+
+完整验证通过：数据库迁移、种子、类型、规则、并发、生产构建与浏览器流程。

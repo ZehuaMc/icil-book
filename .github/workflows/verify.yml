@@ -1,0 +1,54 @@
+name: Verify reservation system
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: station
+          POSTGRES_PASSWORD: station
+          POSTGRES_DB: station_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U station -d station_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://station:station@127.0.0.1:5432/station_test?schema=public
+      SEED_PASSWORD: TestOnly-Station-2026!
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Verify against PostgreSQL and production server
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          npm run verify 2>&1 | tee reports/verify.log
+      - name: Upload browser test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: |
+            playwright-report/
+            test-results/
+            reports/
+          if-no-files-found: ignore

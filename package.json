@@ -1,0 +1,43 @@
+{
+  "name": "teaching-station-reservations",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "prisma generate && next build",
+    "start": "next start --hostname 0.0.0.0",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "node --env-file-if-exists=.env --import tsx prisma/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test --experimental-test-isolation=none tests/rules.test.ts tests/request.test.ts tests/geometry.test.ts",
+    "test:e2e": "node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test",
+    "test:integration": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/integration.test.ts",
+    "test:database": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/database.test.ts",
+    "db:validate": "prisma validate",
+    "verify": "node --env-file-if-exists=.env.test scripts/verify.mjs",
+    "test:api": "node --import tsx --test --experimental-test-isolation=none tests/api.test.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.0",
+    "bcryptjs": "^3.0.2",
+    "lucide-react": "^0.468.0",
+    "next": "^15.5.10",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "prisma": "6.19.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=22.10.0"
+  },
+  "type": "module"
+}
