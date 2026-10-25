@@ -1,180 +1,246 @@
 generator client {
   provider = "prisma-client-js"
 }
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
 enum Role {
   USER
   ASSISTANT
   ADMIN
 }
+
 enum LayoutStatus {
   DRAFT
   PUBLISHED
 }
+
 enum ElementKind {
   DESK
   BOOTH
   DIVIDER
   LABEL
 }
+
 model Group {
-  id           String @id @default(cuid())
-  name         String @unique
-  canReserve   Boolean @default(false)
-  users        User[]
-  weeklyRules  GroupScheduleRule[]
-  dateRules    GroupDateRule[]
-  settings     AppSetting[]
+  id          String              @id @default(cuid())
+  name        String              @unique
+  canReserve  Boolean             @default(false)
+  users       User[]
+  weeklyRules GroupScheduleRule[]
+  dateRules   GroupDateRule[]
+  settings    AppSetting[]
 }
+
 model AppSetting {
   id             String @id @default("main")
   defaultGroupId String
-  defaultGroup   Group @relation(fields: [defaultGroupId], references: [id])
+  defaultGroup   Group  @relation(fields: [defaultGroupId], references: [id])
 }
+
 model GroupScheduleRule {
   id          String @id @default(cuid())
   groupId     String
-  group       Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group       Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
   weekday     Int
   startMinute Int
   endMinute   Int
 }
+
 model GroupDateRule {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   groupId     String
-  group       Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group       Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
   date        String
   allowed     Boolean @default(true)
-  startMinute Int @default(0)
-  endMinute   Int @default(1440)
+  startMinute Int     @default(0)
+  endMinute   Int     @default(1440)
+
   @@index([groupId, date])
 }
+
 model User {
-  id           String @id @default(cuid())
-  name         String
-  email        String @unique
-  passwordHash String
-  role         Role @default(USER)
-  enabled      Boolean @default(true)
-  groupId      String
-  group        Group @relation(fields: [groupId], references: [id])
-  createdAt    DateTime @default(now()) @db.Timestamptz(3)
-  authSessions AuthSession[]
-  coverage     AssistantCoverage[]
-  reservations Reservation[]
-  auditLogs    AuditLog[]
+  id            String                @id @default(cuid())
+  name          String
+  studentId     String
+  email         String                @unique
+  passwordHash  String
+  role          Role                  @default(USER)
+  enabled       Boolean               @default(true)
+  deletedAt     DateTime?             @db.Timestamptz(3)
+  groupId       String
+  group         Group                 @relation(fields: [groupId], references: [id])
+  createdAt     DateTime              @default(now()) @db.Timestamptz(3)
+  authSessions  AuthSession[]
+  coverage      AssistantCoverage[]
+  reservations  Reservation[]
+  adminBookings SessionAdminBooking[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@unique([studentId, role])
 }
+
 model AuthSession {
-  id        String @id
+  id        String   @id
   userId    String
-  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime @db.Timestamptz(3)
 }
+
 model Venue {
-  id       String @id @default(cuid())
+  id       String          @id @default(cuid())
   name     String
   location String
   layouts  LayoutVersion[]
 }
+
 model LayoutVersion {
-  id          String @id @default(cuid())
-  venueId     String
-  venue       Venue @relation(fields: [venueId], references: [id])
-  name        String
-  status      LayoutStatus @default(DRAFT)
-  width       Int @default(1000)
-  height      Int @default(660)
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
-  publishedAt DateTime? @db.Timestamptz(3)
-  elements    LayoutElement[]
-  seats       Seat[]
-  sessions    Session[]
+  id             String          @id @default(cuid())
+  sourceLayoutId String?
+  venueId        String
+  venue          Venue           @relation(fields: [venueId], references: [id])
+  name           String
+  status         LayoutStatus    @default(DRAFT)
+  width          Int             @default(1000)
+  height         Int             @default(660)
+  createdAt      DateTime        @default(now()) @db.Timestamptz(3)
+  publishedAt    DateTime?       @db.Timestamptz(3)
+  elements       LayoutElement[]
+  seats          Seat[]
+  sessions       Session[]
 }
+
 model LayoutElement {
-  id        String @id @default(cuid())
-  layoutId  String
-  layout    LayoutVersion @relation(fields: [layoutId], references: [id], onDelete: Cascade)
-  kind      ElementKind
-  label     String
-  x         Float
-  y         Float
-  width     Float
-  height    Float
-  rotation  Float @default(0)
-  seats     Seat[]
+  id       String        @id @default(cuid())
+  layoutId String
+  layout   LayoutVersion @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  kind     ElementKind
+  label    String
+  x        Float
+  y        Float
+  width    Float
+  height   Float
+  rotation Float         @default(0)
+  seats    Seat[]
 }
+
 model Seat {
-  id           String @id @default(cuid())
-  layoutId     String
-  layout       LayoutVersion @relation(fields: [layoutId], references: [id], onDelete: Cascade)
-  elementId    String?
-  element      LayoutElement? @relation(fields: [elementId], references: [id], onDelete: SetNull)
-  code         String
-  x            Float
-  y            Float
-  rotation     Float @default(0)
-  enabled      Boolean @default(true)
-  reservations Reservation[]
+  id                String         @id @default(cuid())
+  layoutId          String
+  layout            LayoutVersion  @relation(fields: [layoutId], references: [id], onDelete: Cascade)
+  originId          String?
+  elementId         String?
+  element           LayoutElement? @relation(fields: [elementId], references: [id], onDelete: SetNull)
+  code              String
+  x                 Float
+  y                 Float
+  rotation          Float          @default(0)
+  enabled           Boolean        @default(true)
+  fixedForAssistant Boolean        @default(false)
+  reservations      Reservation[]
+
   @@unique([layoutId, code])
 }
+
 model Course {
-  id          String @id @default(cuid())
+  id          String    @id @default(cuid())
   name        String
-  description String @default("")
+  description String    @default("")
   instructor  String
   sessions    Session[]
 }
+
 model Session {
-  id                 String @id @default(cuid())
+  id                 String                @id @default(cuid())
   courseId           String
-  course             Course @relation(fields: [courseId], references: [id])
+  course             Course                @relation(fields: [courseId], references: [id])
   layoutId           String
-  layout             LayoutVersion @relation(fields: [layoutId], references: [id])
-  startsAt           DateTime @db.Timestamptz(3)
-  endsAt             DateTime @db.Timestamptz(3)
-  requiredAssistants Int @default(1)
-  open               Boolean @default(true)
+  layout             LayoutVersion         @relation(fields: [layoutId], references: [id])
+  startsAt           DateTime              @db.Timestamptz(3)
+  endsAt             DateTime              @db.Timestamptz(3)
+  createdAt          DateTime              @default(now()) @db.Timestamptz(3)
+  requiredAssistants Int                   @default(1)
+  open               Boolean               @default(true)
+  cancelledAt        DateTime?             @db.Timestamptz(3)
   coverage           AssistantCoverage[]
+  adminBookings      SessionAdminBooking[]
   reservations       Reservation[]
+
   @@index([startsAt])
 }
+
+model SessionAdminBooking {
+  id        String   @id @default(cuid())
+  sessionId String
+  session   Session  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  adminId   String
+  admin     User     @relation(fields: [adminId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([sessionId, adminId])
+  @@index([sessionId])
+}
+
 model AssistantCoverage {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   sessionId   String
-  session     Session @relation(fields: [sessionId], references: [id])
+  session     Session  @relation(fields: [sessionId], references: [id])
   assistantId String
-  assistant   User @relation(fields: [assistantId], references: [id])
+  assistant   User     @relation(fields: [assistantId], references: [id])
   createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
   @@unique([sessionId, assistantId])
 }
+
 model Reservation {
-  id          String @id @default(cuid())
+  id          String    @id @default(cuid())
   sessionId   String
-  session     Session @relation(fields: [sessionId], references: [id])
+  session     Session   @relation(fields: [sessionId], references: [id])
   userId      String
-  user        User @relation(fields: [userId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
   seatId      String
-  seat        Seat @relation(fields: [seatId], references: [id])
-  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  seat        Seat      @relation(fields: [seatId], references: [id])
+  startsAt    DateTime  @db.Timestamptz(3)
+  endsAt      DateTime  @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  checkedInAt DateTime? @db.Timestamptz(3)
   cancelledAt DateTime? @db.Timestamptz(3)
+
   // Partial unique indexes in the migration enforce uniqueness for active bookings.
   @@index([sessionId, seatId])
   @@index([sessionId, userId])
+  @@index([startsAt])
 }
+
 model AuditLog {
-  id        String @id @default(cuid())
+  id        String   @id @default(cuid())
   actorId   String
-  actor     User @relation(fields: [actorId], references: [id])
+  actor     User     @relation(fields: [actorId], references: [id])
   action    String
   target    String
   details   Json
   createdAt DateTime @default(now()) @db.Timestamptz(3)
 }
+
 model LoginAttempt {
-  key       String @id
-  count     Int @default(1)
-  resetAt   DateTime @db.Timestamptz(3)
+  key     String   @id
+  count   Int      @default(1)
+  resetAt DateTime @db.Timestamptz(3)
+}
+
+model Notification {
+  id          String    @id @default(cuid())
+  recipientId String
+  recipient   User      @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  type        String    @default("BOOKING_CANCELLED")
+  message     String
+  readAt      DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([recipientId, readAt])
+  @@index([createdAt])
 }

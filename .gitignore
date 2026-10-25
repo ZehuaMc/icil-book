@@ -1,5 +1,8 @@
 node_modules/
 .next/
+.next-main/
+.next-user/
+.next-admin/
 .env
 .env.local
 .env.test

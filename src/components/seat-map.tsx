@@ -1,11 +1,14 @@
 'use client';
 import type { Layout, Session, Seat } from '@/lib/types';
-export default function SeatMap({ layout, session, selected, onSelect, disabled = false }: {
+export default function SeatMap({ layout, session, selected, onSelect, disabled = false, canSelectFixed = false, intervalStart, intervalEnd }: {
     layout: Layout;
     session?: Session;
     selected?: string;
     onSelect?: (seat: Seat) => void;
     disabled?: boolean;
+    canSelectFixed?: boolean;
+    intervalStart?: Date;
+    intervalEnd?: Date;
 }) {
     return <svg className="seat-map" viewBox={`0 0 ${layout.width} ${layout.height}`} aria-label="教学场地座位平面图" role="group">
     <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#d8dcd4"/></pattern></defs>
@@ -18,15 +21,25 @@ export default function SeatMap({ layout, session, selected, onSelect, disabled 
       <text x={e.width / 2} y={e.height / 2 + 5} textAnchor="middle" fill="#8b8c7f" fontSize={e.kind === 'LABEL' ? 16 : 12} letterSpacing="2">{e.label}</text>
     </g>)}
     {layout.seats.map(seat => {
-            const booking = session?.reservations.find(r => r.seatId === seat.id);
-            const state = !seat.enabled ? 'disabled' : booking?.mine ? 'mine' : booking ? 'booked' : selected === seat.id ? 'selected' : 'available';
-            const blocked = disabled || !seat.enabled || !!booking;
+            const booking = session?.reservations.find(r => {
+                if (r.seatId !== seat.id)
+                    return false;
+                if (!intervalStart || !intervalEnd || !r.startsAt || !r.endsAt)
+                    return true;
+                return new Date(r.startsAt) < intervalEnd && new Date(r.endsAt) > intervalStart;
+            });
+            const fixedBlocked = seat.fixedForAssistant && !canSelectFixed;
+            const state = !seat.enabled || fixedBlocked ? 'disabled' : booking?.mine ? 'mine' : booking ? 'booked' : selected === seat.id ? 'selected' : 'available';
+            const blocked = disabled || !seat.enabled || fixedBlocked || !!booking;
             const colors = { available: ['#fdfefb', '#a9b99a', '#657951'], selected: ['#788c5d', '#788c5d', '#fff'], mine: ['#788c5d', '#788c5d', '#fff'], booked: ['#e7e9e4', '#d7dcd1', '#a0a698'], disabled: ['#f0f0ed', '#e2e3de', '#b5b7af'] }[state];
-            return <g key={seat.id} role="button" tabIndex={blocked ? -1 : 0} aria-disabled={blocked} aria-label={`座位 ${seat.code}，${{ available: '可预约', selected: '已选择', mine: '本人预约', booked: '已预约', disabled: '停用' }[state]}`} onClick={() => !blocked && onSelect?.(seat)} onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && !blocked) {
+            const seatStatus = seat.fixedForAssistant
+                ? canSelectFixed ? '助教专用工位，可预约' : '助教专用工位，学员不可预约'
+                : { available: '可预约', selected: '已选择', mine: '本人预约', booked: '已预约', disabled: '停用' }[state];
+            return <g key={seat.id} role="button" tabIndex={blocked ? -1 : 0} aria-disabled={blocked} aria-label={`座位 ${seat.code}，${seatStatus}`} onClick={() => !blocked && onSelect?.(seat)} onKeyDown={e => { if ((e.key === 'Enter' || e.key === ' ') && !blocked) {
                 e.preventDefault();
                 onSelect?.(seat);
             } }} className={`map-seat ${state}`} transform={`translate(${seat.x} ${seat.y}) rotate(${seat.rotation} 20 21)`}>
-        <rect x="2" width="36" height="6" rx="3" fill={colors[1]} opacity="0.7"/><rect y="8" width="40" height="34" rx="8" fill={colors[0]} stroke={colors[1]} strokeWidth="1.6"/><text x="20" y="30" textAnchor="middle" fontSize="12" fontWeight="500" fill={colors[2]}>{seat.code}</text>
+        <rect x="2" width="36" height="6" rx="3" fill={colors[1]} opacity="0.7"/><rect y="8" width="40" height="34" rx="8" fill={colors[0]} stroke={colors[1]} strokeWidth="1.6"/><text x="20" y="30" textAnchor="middle" fontSize="12" fontWeight="500" fill={colors[2]}>{seat.code}</text>{state === 'disabled' && <><rect x="5" y="11" width="30" height="28" rx="5" fill="none" stroke="#a9aaa4" strokeWidth="2"/><path d="M8 14L32 36" stroke="#a06f65" strokeWidth="3" strokeLinecap="round"/></>}
       </g>;
         })}
   </svg>;

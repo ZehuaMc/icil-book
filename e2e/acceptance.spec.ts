@@ -24,7 +24,7 @@ const test = base.extend<{ data: Fixture }>({
         const session = await db.session.create({ data: input });
         const users = [], contexts: APIRequestContext[] = [], tokens: string[] = [];
         for (const [i, role] of (['ADMIN', 'ASSISTANT', 'USER'] as const).entries()) {
-            const user = await db.user.create({ data: { name: `验收用户${i}`, email: `${prefix}-${i}@example.test`, role, groupId: group.id, passwordHash: 'unused' } });
+            const user = await db.user.create({ data: { name: `验收用户${i}`, studentId: `${prefix.replace(/[^a-zA-Z0-9]/g, '')}${i}`, email: `${prefix}-${i}@example.test`, role, groupId: group.id, passwordHash: 'unused' } });
             users.push(user);
             const token = randomBytes(32).toString('hex'); tokens.push(token);
             await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: user.id, expiresAt: new Date(Date.now() + 3600000) } });
@@ -69,7 +69,8 @@ test('并发创建重叠场次只成功一个，相邻时段允许', async ({ da
 });
 
 test('最后管理员保护：两名管理员同时降级或禁用仍保留一名', async ({ data, playwright, baseURL }) => {
-    const other = await db.user.create({ data: { name: '第二管理员', email: `admin-${randomUUID()}@example.test`, groupId: data.groupId, role: 'ADMIN', passwordHash: 'unused' } });
+    const otherId = randomUUID();
+    const other = await db.user.create({ data: { name: '第二管理员', studentId: otherId.replace(/[^a-zA-Z0-9]/g, ''), email: `admin-${otherId}@example.test`, groupId: data.groupId, role: 'ADMIN', passwordHash: 'unused' } });
     const token = randomBytes(32).toString('hex');
     await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: other.id, expiresAt: new Date(Date.now() + 3600000) } });
     const context = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } });
@@ -329,7 +330,8 @@ test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点',
 
 test('两个浏览器抢座刷新，失败可重试，取消后座位释放', async ({ data, browser, baseURL }) => {
     await cover(data);
-    const other = await db.user.create({ data: { name: '另一学员', email: `${randomUUID()}@example.test`, passwordHash: 'unused', groupId: data.groupId } });
+    const otherId = randomUUID();
+    const other = await db.user.create({ data: { name: '另一学员', studentId: otherId.replace(/[^a-zA-Z0-9]/g, ''), email: `${otherId}@example.test`, passwordHash: 'unused', groupId: data.groupId } });
     const token = randomBytes(32).toString('hex');
     await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: other.id, expiresAt: new Date(Date.now() + 3600000) } });
     const a = await browser.newContext({ baseURL }), b = await browser.newContext({ baseURL });

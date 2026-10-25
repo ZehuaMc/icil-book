@@ -20,9 +20,11 @@ export type Group = {
 export type User = {
     id: string;
     name: string;
+    studentId: string;
     email: string;
     role: 'USER' | 'ADMIN' | 'ASSISTANT';
     enabled: boolean;
+    deletedAt?: string | null;
     groupId: string;
     group: Group;
 };
@@ -38,11 +40,13 @@ export type Element = {
 };
 export type Seat = {
     id: string;
+    originId?: string | null;
     code: string;
     x: number;
     y: number;
     rotation: number;
     enabled: boolean;
+    fixedForAssistant: boolean;
     elementId?: string | null;
 };
 export type Venue = {
@@ -52,6 +56,7 @@ export type Venue = {
 };
 export type Layout = {
     id: string;
+    sourceLayoutId?: string | null;
     name: string;
     venueId: string;
     venue: Venue;
@@ -77,7 +82,10 @@ export type Session = {
     endsAt: string;
     requiredAssistants: number;
     open: boolean;
+    cancelledAt?: string | null;
     allowed: boolean;
+    adminReady: boolean;
+    adminBookings: { id: string; adminId: string; admin: { id: string; name: string } }[];
     coverage: {
         id: string;
         assistantId: string;
@@ -91,6 +99,9 @@ export type Session = {
         seatId: string;
         mine?: boolean;
         userId?: string;
+        startsAt?: string;
+        endsAt?: string;
+        checkedInAt?: string | null;
     }[];
 };
 export type Reservation = {
@@ -98,8 +109,11 @@ export type Reservation = {
     sessionId: string;
     session: Session;
     seat: Seat;
+    startsAt: string;
+    endsAt: string;
     user: User;
     cancelledAt: string | null;
+    checkedInAt: string | null;
     createdAt: string;
 };
 export type Coverage = {
@@ -109,6 +123,13 @@ export type Coverage = {
         name: string;
         email: string;
     };
+};
+export type UserNotification = {
+    id: string;
+    type: string;
+    message: string;
+    readAt: string | null;
+    createdAt: string;
 };
 export async function api<T = Record<string, unknown>>(path: string, method = 'GET', data?: unknown): Promise<T> {
     const res = await fetch(`/api/${path}`, { method, headers: data ? { 'Content-Type': 'application/json' } : undefined, body: data ? JSON.stringify(data) : undefined, cache: 'no-store' });

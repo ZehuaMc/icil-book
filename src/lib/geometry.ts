@@ -22,3 +22,19 @@ export function movement(shapes: Shape[], dx: number, dy: number, width: number,
         dy: Math.max(-Math.min(...boxes.map(b => b.top)), Math.min(height - Math.max(...boxes.map(b => b.bottom)), dy)),
     };
 }
+
+export function snapMovement(shapes: Shape[], targets: Shape[], dx: number, dy: number, width: number, height: number, threshold = 12) {
+    const bounded = movement(shapes, dx, dy, width, height);
+    const moving = shapes.map(bounds), others = targets.map(bounds);
+    const xCandidates: { delta: number; guide: number }[] = [], yCandidates: { delta: number; guide: number }[] = [];
+    const xPoints = (b: ReturnType<typeof bounds>) => [b.left, (b.left + b.right) / 2, b.right];
+    const yPoints = (b: ReturnType<typeof bounds>) => [b.top, (b.top + b.bottom) / 2, b.bottom];
+    for (const a of moving) for (const b of others) {
+        for (const ax of xPoints(a)) for (const bx of xPoints(b)) xCandidates.push({ delta: bx - (ax + bounded.dx), guide: bx });
+        for (const ay of yPoints(a)) for (const by of yPoints(b)) yCandidates.push({ delta: by - (ay + bounded.dy), guide: by });
+    }
+    const x = xCandidates.filter(c => Math.abs(c.delta) <= threshold).sort((a, b) => Math.abs(a.delta) - Math.abs(b.delta))[0];
+    const y = yCandidates.filter(c => Math.abs(c.delta) <= threshold).sort((a, b) => Math.abs(a.delta) - Math.abs(b.delta))[0];
+    const snapped = movement(shapes, bounded.dx + (x?.delta ?? 0), bounded.dy + (y?.delta ?? 0), width, height);
+    return { ...snapped, guideX: x ? x.guide : undefined, guideY: y ? y.guide : undefined };
+}

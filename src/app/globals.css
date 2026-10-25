@@ -4,3 +4,122 @@
 .mobile-account{display:none}
 @media(max-width:750px){.mobile-account{display:flex}.mobile-account .button{padding:5px 9px}.topbar-right .campus{display:none}}
 @media(max-width:750px){.guidelines{height:auto}}
+
+/* 首页品牌标识 */
+.brand-icon{width:76px;height:76px;background:#f2f5ed;color:var(--green);overflow:hidden}
+.brand-icon img{width:76px;height:76px;display:block;object-fit:contain}
+.brand{margin-left:0;margin-right:0;font-size:26px;gap:6px}
+.brand div span{font-size:9px}
+.brand-logos{width:100%}
+.workspace-brand{display:flex;align-items:center;justify-content:center;gap:6px}
+.workspace-brand>div{font-size:26px;font-weight:600;letter-spacing:3px;line-height:1.3}
+.workspace-brand>div span{display:block;font-size:9px;letter-spacing:1.8px;line-height:1.3;font-weight:500;color:#8b9382}
+.nav-caption{font-size:12px}
+.sidebar nav a{font-size:14px}
+.little-note{font-size:13px}
+.little-note small,.sidebar-help,.profile{font-size:11px}
+.profile{font-size:14px}
+.profile div small{font-size:11px}
+.workspace-label{min-height:96px;padding:8px 0;border:0;justify-content:center}
+.workspace-logos{display:flex;align-items:center;justify-content:center;gap:8px;min-height:80px}
+.workspace-logos img{display:block;object-fit:contain}
+.workspace-logo-combined{width:136px;height:auto}
+.workspace-logo-icil{width:38px;height:38px}
+.workspace-logo-ysyx{width:43px;height:38px}
+
+/* 首页按日期和时间段选择 */
+.session-card{min-height:72px;display:flex;align-items:center;justify-content:center;text-align:center}
+.session-time{display:flex;align-items:center;justify-content:center;gap:7px;color:#4a5641;font-size:18px;font-weight:600;letter-spacing:.2px}
+.session-time svg{color:var(--green);flex-shrink:0}
+@media(max-width:750px){.brand{font-size:21px;gap:6px;margin-bottom:12px}.brand div span{font-size:6px}.brand-icon{width:38px;height:38px}.brand-icon img{width:35px;height:35px}.workspace-label{min-height:50px}.workspace-brand{gap:5px}.workspace-logos{gap:7px}.workspace-logo-combined{width:110px}.workspace-logo-icil{width:20px;height:20px}.workspace-logo-ysyx{width:23px;height:20px}.session-card{min-height:62px}.session-time{font-size:15px}}
+@media(min-width:751px) and (max-width:1200px){.brand{font-size:24px;gap:6px;margin-bottom:24px}.brand-icon{width:70px;height:70px}.brand-icon img{width:70px;height:70px}.workspace-brand{gap:3px}.workspace-brand>div{font-size:23px}.workspace-label{min-height:86px}.workspace-logos{gap:4px}.workspace-logo-combined{width:126px}.workspace-logo-icil{width:35px;height:35px}.workspace-logo-ysyx{width:39px;height:35px}}
+
+/* 左上角品牌区：文字在上，两个合作 logo 在下方左对齐 */
+.brand{justify-content:center;align-items:center;flex-direction:column;text-align:center;min-height:0;margin:0 0 27px;font-size:26px;gap:7px}
+.workspace-label{min-height:0;padding:0;border:0;border-radius:0;justify-content:flex-start;margin:0 0 27px}
+.workspace-label{justify-content:center}
+.workspace-logos{justify-content:center;min-height:0}
+@media(max-width:750px){.brand{margin:0 0 12px;font-size:21px;gap:6px}.workspace-label{display:flex;min-height:0;padding:0;margin:0 0 12px}.workspace-logos{min-height:0;justify-content:center}}
+.section-top h2{font-size:18px}.section-top h2>span{font-size:11px}.session-time{font-size:24px}.session-card{padding:21px}.map-legend{font-size:12px;gap:16px}.map-legend i{width:14px;height:14px}.map-caption,.map-bottom{font-size:13px}.legend-disabled{position:relative;border:2px solid #a9aaa4;background:#f0f0ed}.legend-disabled::after{content:"";position:absolute;left:1px;top:5px;width:10px;height:2px;background:#a06f65;transform:rotate(-45deg)}
+
+@media(max-width:750px){.sidebar{position:fixed;z-index:40;top:0;left:0;width:100%;height:auto;max-height:132px;overflow:hidden}.sidebar .brand{margin-bottom:8px}.main-shell{margin-left:0;padding-top:132px}.topbar{position:relative;z-index:10}}
+.assistant-seat-map{margin:12px 0;max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px}.assistant-seat-map .seat-map{min-height:220px}
+@media(max-width:1000px){.sidebar{position:fixed;z-index:40;top:0;left:0;width:100%;height:auto;max-height:140px;overflow:hidden;padding:12px 16px}.sidebar .brand{margin-bottom:8px}.sidebar nav{display:flex;gap:7px;margin:8px 0 0;overflow-x:auto}.sidebar nav a{padding:7px 11px;white-space:nowrap}.main-shell{margin-left:0;width:100%;padding-top:140px}.topbar{position:relative;z-index:10}}
+
+.workspace-logo-combined{max-height:70px;object-fit:contain}@media(max-width:1000px){.workspace-logo-combined{max-height:55px}}
+
+/* Keep the sidebar brand as a separate, stable block.  The brand image and
+   navigation used to compete for the same flex space, which made the logo,
+   title and first menu item look stuck together at some viewport heights. */
+.sidebar > .brand {
+  width: 100%;
+  min-height: 0;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  margin: 0 0 30px;
+  padding: 2px 6px 0;
+  line-height: 1.25;
+  text-align: center;
+}
+.sidebar > .brand .workspace-logo-combined {
+  display: block;
+  width: min(154px, 100%);
+  height: 59px;
+  max-height: none;
+  flex: 0 0 59px;
+  object-fit: contain;
+}
+.sidebar > .brand > div {
+  display: block;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.sidebar > .brand > div span {
+  margin-top: 3px;
+  line-height: 1.2;
+}
+.sidebar > nav {
+  flex: 0 0 auto;
+  width: 100%;
+  margin-top: 0;
+}
+.sidebar > .nav-caption {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+@media (max-width: 1000px) {
+  .sidebar {
+    max-height: 250px;
+    overflow: visible;
+  }
+  .main-shell {
+    padding-top: 250px;
+  }
+  .sidebar > .brand {
+    gap: 7px;
+    margin-bottom: 10px;
+    padding-top: 0;
+  }
+  .sidebar > .brand .workspace-logo-combined {
+    width: min(132px, 100%);
+    height: 50px;
+    flex-basis: 50px;
+  }
+  .sidebar > .brand > div {
+    font-size: 21px;
+  }
+  .sidebar > nav {
+    margin-top: 0;
+  }
+}
+.logout-control{margin-left:auto}
+.booking-actions{display:grid;gap:9px}.booking-time-form{grid-template-columns:1fr 1fr;margin-top:18px}.booking-time-form>p{grid-column:1/-1}.booking-time-select{margin-top:20px;padding:18px;background:#fff;border:1px solid var(--line);border-radius:10px}.booking-time-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}.booking-time-fields label{display:grid;gap:5px;font-size:11px;color:var(--muted)}.booking-time-fields input{width:100%}.booking-time-fields p{grid-column:1/-1}
+@media(max-width:750px){.booking-time-form{grid-template-columns:1fr}.booking-time-form>p{grid-column:auto}}
+.account-identity{display:flex;align-items:center;gap:13px;padding:17px 0;border-bottom:1px solid var(--line);margin-bottom:24px}.account-identity>.avatar{width:42px;height:42px;font-size:17px}.account-identity>div{display:grid;gap:3px}.account-identity strong{font-size:14px;font-weight:600}.account-identity>div>span{color:var(--muted);font-size:11px}.account-section{padding:20px 0 24px;border-bottom:1px solid var(--line);margin-bottom:25px}.account-section-heading{margin-bottom:17px}.account-section-heading h2{display:flex;align-items:center;gap:8px}.account-section-heading h2 svg{color:var(--green)}.account-section-heading p{margin-top:6px;color:var(--muted);font-size:11px}.password-form{display:grid;grid-template-columns:repeat(2,minmax(180px,280px));align-items:end;gap:13px;max-width:650px}.password-form>button{justify-self:start}.password-input-row{position:relative}.password-input-row input{padding-right:42px}.password-visibility{position:absolute;right:3px;top:50%;transform:translateY(-50%);border:0;background:transparent;padding:7px;color:#929b87}.password-visibility:hover{background:transparent;color:var(--green-dark)}.reservation-history{display:grid;gap:24px}.reservation-section{padding:4px 0}.reservation-section .section-top{margin-bottom:13px}.reservation-section .section-top h2{font-size:16px}.reservation-empty{padding:23px 0;color:var(--muted);font-size:12px}.reservation-section .record-card>h3{font-size:14px;margin:3px 0 12px}.reservation-section .record-card>p{line-height:1.6}
+@media(max-width:750px){.password-form{grid-template-columns:1fr;max-width:none}.account-section{padding:17px 0 20px}.account-identity{margin-bottom:18px}.reservation-history{gap:14px}}
+.notification-menu{position:relative}.notification-trigger{position:relative}.notification-count{position:absolute;top:0;right:0;min-width:15px;height:15px;padding:0 3px;border-radius:8px;background:#a25f4d;color:#fff;font-size:8px;line-height:15px;text-align:center}.notification-panel{position:absolute;right:0;top:38px;width:350px;max-width:calc(100vw - 30px);background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 35px #37452a20;z-index:70;overflow:hidden}.notification-heading{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line);color:#667b4c;font-size:12px}.notification-heading .text-button{font-size:10px}.notification-list{max-height:360px;overflow-y:auto}.notification-item{width:100%;display:flex;align-items:flex-start;gap:10px;text-align:left;border:0;border-bottom:1px solid #f0f2eb;border-radius:0;padding:13px 15px;background:#fff;position:relative;color:#758368;white-space:normal}.notification-item:hover{background:#fafbf7}.notification-item-icon{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;background:#f0f4e8;color:#829968;border-radius:7px}.notification-item>span:nth-child(2){display:flex;flex-direction:column;gap:4px;min-width:0}.notification-message{font-size:11px;line-height:1.5}.notification-item small{font-size:9px;color:#a8b29d}.notification-item i{width:6px;height:6px;border-radius:50%;background:#a25f4d;position:absolute;right:12px;top:13px}.notification-empty{padding:28px 16px;text-align:center;color:#a2ab96;font-size:11px}
