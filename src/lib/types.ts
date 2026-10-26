@@ -23,6 +23,7 @@ export type User = {
     studentId: string;
     email: string;
     role: 'USER' | 'ADMIN' | 'ASSISTANT';
+    memberType: 'YSYX' | 'ICIL';
     enabled: boolean;
     deletedAt?: string | null;
     groupId: string;
@@ -82,9 +83,18 @@ export type Session = {
     endsAt: string;
     requiredAssistants: number;
     open: boolean;
+    icilOnly?: boolean;
     cancelledAt?: string | null;
     allowed: boolean;
     adminReady: boolean;
+    hasAdminSeat?: boolean;
+    assistantPresent?: boolean;
+    staffPresenceWindows?: { startsAt: string; endsAt: string }[];
+    bookingBlocked?: boolean;
+    bookingBlocks?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string }[];
+    bookingBlock?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string } | null;
+    sessionBlocked?: boolean;
+    dayBlocked?: boolean;
     adminBookings: { id: string; adminId: string; admin: { id: string; name: string } }[];
     coverage: {
         id: string;
@@ -137,4 +147,32 @@ export async function api<T = Record<string, unknown>>(path: string, method = 'G
     if (!res.ok)
         throw new Error(json.error ?? '请求失败');
     return json;
+}
+const LAYOUT_UPDATED_EVENT = 'station:layout-updated';
+const LAYOUT_UPDATED_STORAGE_KEY = 'station-layout-updated';
+export function announceLayoutUpdate() {
+    if (typeof window === 'undefined')
+        return;
+    const timestamp = String(Date.now());
+    window.dispatchEvent(new Event(LAYOUT_UPDATED_EVENT));
+    try {
+        window.localStorage.setItem(LAYOUT_UPDATED_STORAGE_KEY, timestamp);
+    }
+    catch {
+        // Same-tab listeners still receive the custom event when storage is unavailable.
+    }
+}
+export function subscribeToLayoutUpdates(listener: () => void) {
+    if (typeof window === 'undefined')
+        return () => {};
+    const onStorage = (event: StorageEvent) => {
+        if (event.key === LAYOUT_UPDATED_STORAGE_KEY)
+            listener();
+    };
+    window.addEventListener(LAYOUT_UPDATED_EVENT, listener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+        window.removeEventListener(LAYOUT_UPDATED_EVENT, listener);
+        window.removeEventListener('storage', onStorage);
+    };
 }

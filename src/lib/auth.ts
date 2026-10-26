@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { db } from './db';
 import { check } from './errors';
-export const publicUser = { id: true, name: true, studentId: true, email: true, role: true, enabled: true, deletedAt: true, groupId: true, group: { include: { weeklyRules: true, dateRules: true } } } as const;
+export const publicUser = { id: true, name: true, studentId: true, email: true, role: true, memberType: true, enabled: true, deletedAt: true, groupId: true, group: { include: { weeklyRules: true, dateRules: true } } } as const;
 export function isOperator(user: { role: string } | null | undefined) { return user?.role === 'ADMIN' || user?.role === 'ASSISTANT'; }
 export function hashToken(token: string) { return createHash('sha256').update(token).digest('hex'); }
 export async function currentUser() {

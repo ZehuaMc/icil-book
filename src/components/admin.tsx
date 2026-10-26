@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Users, CalendarDays, Armchair, PanelTop, Plus, Download, ArrowUpRight, ShieldCheck, Check, Pencil, UserX, KeyRound } from 'lucide-react';
-import { api, type User, type Group, type Layout, type Session, type Reservation, type Coverage } from '@/lib/types';
+import { api, subscribeToLayoutUpdates, type User, type Group, type Layout, type Session, type Reservation, type Coverage } from '@/lib/types';
 import { formatDate, formatTime, localParts } from '@/lib/rules';
 import LayoutEditor from './layout-editor';
 import Modal from './modal';
@@ -66,8 +66,8 @@ function UserAdmin({ notify }: Props) {
             setBusy(false);
         }
     };
-    return <><div className="toolbar"><span>{data.users.length} 位成员</span><input placeholder="搜索姓名或学号" aria-label="搜索用户" value={search} onChange={e => setSearch(e.target.value)}/></div><ErrorMessage message={error || groups.error}/><div className="table-wrap"><table><thead><tr><th>成员</th><th>用户角色</th><th>所属分组</th><th>账号状态</th><th>操作</th></tr></thead><tbody>{data.users.filter(u => `${u.name} ${u.studentId} ${u.email}`.includes(search)).map(u => <tr key={u.id}><td><div className="user-cell"><span className="avatar">{u.name.slice(0, 1)}</span><div>{u.name}<small>学号 {u.studentId}</small></div></div></td><td>{u.role === 'USER' ? '学员' : '管理员'}</td><td>{u.group.name}</td><td><span className={`badge ${u.deletedAt ? '' : u.enabled ? 'green' : ''}`}>{u.deletedAt ? '已注销' : u.enabled ? '已启用' : '已停用'}</span></td><td>{!u.deletedAt && <>{u.role === 'USER' && <button className="text-button" disabled={busy || !u.enabled} title="重置学员密码为 123456" onClick={() => resetPassword(u)}><KeyRound size={14}/>重置密码</button>}<button className="text-button" disabled={busy} onClick={() => setEdit({ ...u })}><Pencil size={14}/>编辑</button><button className="text-button danger" disabled={busy} onClick={() => unregister(u)}><UserX size={14}/>注销</button></>}</td></tr>)}</tbody></table></div>{edit && <Dialog title="编辑用户" close={() => setEdit(null)}><form className="form-grid" onSubmit={async (e) => { e.preventDefault(); setBusy(true); try {
-        await api(`admin/users/${edit.id}`, 'PATCH', { name: edit.name, role: edit.role, groupId: edit.groupId, enabled: edit.enabled });
+    return <><div className="toolbar"><span>{data.users.length} 位成员</span><input placeholder="搜索姓名或学号" aria-label="搜索用户" value={search} onChange={e => setSearch(e.target.value)}/></div><ErrorMessage message={error || groups.error}/><div className="table-wrap"><table><thead><tr><th>成员</th><th>用户角色</th><th>成员类型</th><th>所属分组</th><th>账号状态</th><th>操作</th></tr></thead><tbody>{data.users.filter(u => `${u.name} ${u.studentId} ${u.email}`.includes(search)).map(u => <tr key={u.id}><td><div className="user-cell"><span className="avatar">{u.name.slice(0, 1)}</span><div>{u.name}<small>学号 {u.studentId}</small></div></div></td><td>{u.role === 'USER' ? '学员' : '管理员'}</td><td>{u.role === 'USER' ? u.memberType === 'ICIL' ? 'ICIL成员' : 'YSYX成员' : '管理员'}</td><td>{u.group.name}</td><td><span className={`badge ${u.deletedAt ? '' : u.enabled ? 'green' : ''}`}>{u.deletedAt ? '已注销' : u.enabled ? '已启用' : '已停用'}</span></td><td>{!u.deletedAt && <>{u.role === 'USER' && <button className="text-button" disabled={busy || !u.enabled} title="重置学员密码为 123456" onClick={() => resetPassword(u)}><KeyRound size={14}/>重置密码</button>}<button className="text-button" disabled={busy} onClick={() => setEdit({ ...u })}><Pencil size={14}/>编辑</button><button className="text-button danger" disabled={busy} onClick={() => unregister(u)}><UserX size={14}/>注销</button></>}</td></tr>)}</tbody></table></div>{edit && <Dialog title="编辑用户" close={() => setEdit(null)}><form className="form-grid" onSubmit={async (e) => { e.preventDefault(); setBusy(true); try {
+        await api(`admin/users/${edit.id}`, 'PATCH', { name: edit.name, role: edit.role, memberType: edit.memberType, groupId: edit.groupId, enabled: edit.enabled });
         await reload();
         setEdit(null);
         notify('用户已更新');
@@ -77,7 +77,7 @@ function UserAdmin({ notify }: Props) {
     }
     finally {
         setBusy(false);
-    } }}><label>姓名<input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })}/></label><label>角色<select value={edit.role === 'USER' ? 'USER' : 'ADMIN'} onChange={e => setEdit({ ...edit, role: e.target.value as User['role'] })}><option value="USER">学员</option><option value="ADMIN">管理员</option></select></label><label>分组<select value={edit.groupId} onChange={e => setEdit({ ...edit, groupId: e.target.value })}>{groups.data.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label><label className="check-label"><input type="checkbox" checked={edit.enabled} onChange={e => setEdit({ ...edit, enabled: e.target.checked })}/>启用账号</label><button className="primary" disabled={busy}>保存用户</button></form></Dialog>}</>;
+    } }}><label>姓名<input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })}/></label><label>角色<select value={edit.role === 'USER' ? 'USER' : 'ADMIN'} onChange={e => setEdit({ ...edit, role: e.target.value as User['role'] })}><option value="USER">学员</option><option value="ADMIN">管理员</option></select></label>{edit.role === 'USER' && <label>成员类型<select value={edit.memberType} onChange={e => setEdit({ ...edit, memberType: e.target.value as User['memberType'] })}><option value="YSYX">YSYX成员</option><option value="ICIL">ICIL成员</option></select></label>}<label>分组<select value={edit.groupId} onChange={e => setEdit({ ...edit, groupId: e.target.value })}>{groups.data.groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}</select></label><label className="check-label"><input type="checkbox" checked={edit.enabled} onChange={e => setEdit({ ...edit, enabled: e.target.checked })}/>启用账号</label><button className="primary" disabled={busy}>保存用户</button></form></Dialog>}</>;
 }
 const blankGroup: Group = { id: '', name: '', canReserve: true, weeklyRules: [], dateRules: [] };
 const minuteText = (n: number) => `${Math.floor(n / 60).toString().padStart(2, '0')}:${(n % 60).toString().padStart(2, '0')}`;
@@ -128,6 +128,11 @@ function SessionAdmin({ notify, user }: Props & { user: User }) {
     const { data, reload, error } = useResource<{ sessions: Session[] }>('admin/sessions', { sessions: [] });
     const layouts = useResource<{ layouts: Layout[] }>('layouts', { layouts: [] });
     const [edit, setEdit] = useState<SessionForm | null>(null), [busy, setBusy] = useState(false), [seatSession, setSeatSession] = useState<Session | null>(null), [selectedSeat, setSelectedSeat] = useState<string>();
+    useEffect(() => {
+        const interval = setInterval(() => reload().catch(() => { }), 5000);
+        const unsubscribe = subscribeToLayoutUpdates(() => reload().catch(() => { }));
+        return () => { clearInterval(interval); unsubscribe(); };
+    }, [reload]);
     const nowForInput = currentShanghaiDateTime();
     const publishedLayouts = layouts.data.layouts.filter(l => l.status === 'PUBLISHED').slice(0, 1);
     const refreshSeatSession = (id: string) => setSeatSession(data.sessions.find(s => s.id === id) ?? null);
@@ -153,7 +158,28 @@ function SessionAdmin({ notify, user }: Props & { user: User }) {
         } catch (e) { notify((e as Error).message); }
         finally { setBusy(false); }
     }
-    return <><div className="toolbar"><span>{data.sessions.length} 个预约时段 · 北京时间</span><button className="primary" onClick={() => { const now = currentShanghaiDateTime(); setEdit({ id: '', layoutId: publishedLayouts[0]?.id ?? '', startDate: now.date, startTime: now.time, endDate: now.date, endTime: now.time, open: false }); }}><Plus size={16}/>新增预约时段</button></div><ErrorMessage message={error || layouts.error}/><div className="table-wrap"><table><thead><tr><th>预约时间</th><th>场地与布局</th><th>管理员工位</th><th>开放状态</th><th>学员预约</th><th>操作</th></tr></thead><tbody>{data.sessions.map(s => { const adminSeats = s.reservations.filter(r => r.userId === user.id).map(r => s.layout.seats.find(seat => seat.id === r.seatId)?.code).filter(Boolean); return <tr key={s.id}><td><strong>{formatDate(s.startsAt)}</strong><small>{formatTime(s.startsAt)} – {formatTime(s.endsAt)}</small></td><td>{s.layout.venue.name}<small>{s.layout.name}</small></td><td>{adminSeats.length ? adminSeats.join('、') : '未选择'}<button className="text-button" disabled={!!s.cancelledAt || new Date(s.startsAt) <= new Date()} onClick={() => { if (s.open) { notify('请先暂停开放此时间，再更换管理员工位'); return; } setSelectedSeat(undefined); refreshSeatSession(s.id); }}>{adminSeats.length ? '更换工位' : '选择工位'}</button></td><td><span className={`badge ${s.cancelledAt ? '' : s.open ? 'green' : 'amber'}`}>{s.cancelledAt ? '已取消' : s.open ? '已开放' : '已暂停/未开放'}</span>{!s.cancelledAt && <button className="text-button" disabled={busy || new Date(s.startsAt) <= new Date()} onClick={() => toggleAdminReady(s)}>{s.open ? '暂停开放' : '开放此时间'}</button>}</td><td>{s.reservations.filter(r => !s.layout.seats.find(seat => seat.id === r.seatId)?.fixedForAssistant && r.userId !== user.id).length}</td><td><button className="text-button" disabled={!!s.cancelledAt || new Date(s.startsAt) <= new Date()} onClick={() => setEdit({ id: s.id, layoutId: s.layoutId, ...sessionFormValues(s.startsAt, s.endsAt), open: s.open })}>编辑时间</button></td></tr>; })}</tbody></table>{!data.sessions.length && <p className="table-empty">暂无预约时段，请先新增时间。</p>}</div>{edit && <Dialog title={edit.id ? '编辑预约时段' : '新增预约时段'} close={() => setEdit(null)}><form className="form-grid" onSubmit={async (e) => { e.preventDefault(); setBusy(true); try {
+    async function toggleSessionBlock(session: Session) {
+        setBusy(true);
+        try {
+            const dayOnly = session.dayBlocked && !session.sessionBlocked;
+            const path = dayOnly ? `admin/dates/${localParts(session.startsAt).date}/disable` : `admin/sessions/${session.id}/disable`;
+            const removing = session.sessionBlocked || dayOnly;
+            await api(path, removing ? 'DELETE' : 'POST', removing ? undefined : { reason: '管理员手动禁用' });
+            await reload();
+            notify(removing ? '已恢复预约（仍需重新开放）' : '已禁用该时段，范围内预约已取消');
+        } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    }
+    async function toggleDayBlock(session: Session) {
+        const date = localParts(session.startsAt).date;
+        setBusy(true);
+        try {
+            const blocked = session.dayBlocked;
+            await api(`admin/dates/${date}/disable`, blocked ? 'DELETE' : 'POST', blocked ? undefined : { reason: '管理员手动禁用当天' });
+            await reload();
+            notify(blocked ? '已恢复当天预约（时段仍需重新开放）' : '已禁用当天预约，范围内预约已取消');
+        } catch (e) { notify((e as Error).message); } finally { setBusy(false); }
+    }
+    return <><div className="toolbar"><span>{data.sessions.length} 个预约时段 · 北京时间</span><button className="primary" onClick={() => { const now = currentShanghaiDateTime(); setEdit({ id: '', layoutId: publishedLayouts[0]?.id ?? '', startDate: now.date, startTime: now.time, endDate: now.date, endTime: now.time, open: false }); }}><Plus size={16}/>新增预约时段</button></div><ErrorMessage message={error || layouts.error}/><div className="table-wrap"><table><thead><tr><th>预约时间</th><th>场地与布局</th><th>管理员工位</th><th>开放状态</th><th>学员预约</th><th>操作</th></tr></thead><tbody>{data.sessions.map(s => { const adminSeats = s.reservations.filter(r => r.userId === user.id).map(r => s.layout.seats.find(seat => seat.id === r.seatId)?.code).filter(Boolean); return <tr key={s.id}><td><strong>{formatDate(s.startsAt)}</strong><small>{formatTime(s.startsAt)} – {formatTime(s.endsAt)}</small></td><td>{s.layout.venue.name}<small>{s.layout.name}</small></td><td>{adminSeats.length ? adminSeats.join('、') : '未选择'}<button className="text-button" disabled={!!s.cancelledAt || new Date(s.startsAt) <= new Date()} onClick={() => { if (s.open) { notify('请先暂停开放此时间，再更换管理员工位'); return; } setSelectedSeat(undefined); refreshSeatSession(s.id); }}>{adminSeats.length ? '更换工位' : '选择工位'}</button></td><td><span className={`badge ${s.bookingBlocked ? '' : s.cancelledAt ? '' : s.open ? 'green' : 'amber'}`}>{s.bookingBlocked ? '已禁用预约' : s.cancelledAt ? '已取消' : s.open ? '已开放' : '已暂停/未开放'}</span>{!s.bookingBlocked && !s.cancelledAt && <button className="text-button" disabled={busy || new Date(s.startsAt) <= new Date()} onClick={() => toggleAdminReady(s)}>{s.open ? '暂停开放' : '开放此时间'}</button>}<button className="text-button danger" disabled={busy || new Date(s.startsAt) <= new Date()} onClick={() => toggleSessionBlock(s)}>{s.bookingBlocked ? '恢复预约' : '禁用时段'}</button><button className="text-button" disabled={busy || new Date(s.startsAt) <= new Date()} onClick={() => toggleDayBlock(s)}>禁用当天</button></td><td>{s.reservations.filter(r => !s.layout.seats.find(seat => seat.id === r.seatId)?.fixedForAssistant && r.userId !== user.id).length}</td><td><button className="text-button" disabled={!!s.cancelledAt || new Date(s.startsAt) <= new Date()} onClick={() => setEdit({ id: s.id, layoutId: s.layoutId, ...sessionFormValues(s.startsAt, s.endsAt), open: s.open })}>编辑时间</button></td></tr>; })}</tbody></table>{!data.sessions.length && <p className="table-empty">暂无预约时段，请先新增时间。</p>}</div>{edit && <Dialog title={edit.id ? '编辑预约时段' : '新增预约时段'} close={() => setEdit(null)}><form className="form-grid" onSubmit={async (e) => { e.preventDefault(); setBusy(true); try {
         const startsAt = `${edit.startDate}T${edit.startTime}:00+08:00`, endsAt = `${edit.endDate}T${edit.endTime}:00+08:00`;
         await api(edit.id ? `sessions/${edit.id}` : 'sessions', edit.id ? 'PUT' : 'POST', { layoutId: edit.layoutId, startsAt, endsAt, open: edit.open, requiredAssistants: 1 });
         await reload(); setEdit(null); notify(edit.id ? '预约时段已更新' : '预约时段已创建，请先选择管理员工位再开放');
@@ -168,7 +194,7 @@ function ReservationAdmin({ notify }: Props) {
     const sessions = useResource<{
         sessions: Session[];
     }>('admin/sessions', { sessions: [] });
-    return <><div className="toolbar"><select aria-label="筛选预约时段" value={filter} onChange={e => setFilter(e.target.value)}><option value="">全部时段</option>{sessions.data.sessions.map(s => <option value={s.id} key={s.id}>{formatDate(s.startsAt)} {formatTime(s.startsAt)} – {formatTime(s.endsAt)}</option>)}</select><a className="button secondary" href={`/api/admin/reservations?export=csv${filter ? `&sessionId=${filter}` : ''}`}><Download size={16}/>导出 CSV</a></div><ErrorMessage message={error || sessions.error}/><div className="table-wrap"><table><thead><tr><th>预约人</th><th>预约时间</th><th>座位</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.reservations.map(r => <tr key={r.id}><td>{r.user.name}<small>学号 {r.user.studentId} · {r.user.role === 'USER' ? '学员' : '管理员'}</small></td><td>{formatDate(r.session.startsAt)}<small>{formatTime(r.session.startsAt)} – {formatTime(r.session.endsAt)}</small></td><td><span className="seat-pill">{r.seat.code}</span></td><td><span className={`badge ${r.cancelledAt ? '' : 'green'}`}>{r.cancelledAt ? '已取消' : '已预约'}</span></td><td>{!r.cancelledAt && new Date(r.session.startsAt) > new Date() && <button disabled={busy === r.id} className="text-button" onClick={async () => { if (!confirm('确认取消此预约？'))
+    return <><div className="toolbar"><select aria-label="筛选预约时段" value={filter} onChange={e => setFilter(e.target.value)}><option value="">全部时段</option>{sessions.data.sessions.map(s => <option value={s.id} key={s.id}>{formatDate(s.startsAt)} {formatTime(s.startsAt)} – {formatTime(s.endsAt)}</option>)}</select><a className="button secondary" href={`/api/admin/reservations?export=csv${filter ? `&sessionId=${filter}` : ''}`}><Download size={16}/>导出 CSV</a></div><ErrorMessage message={error || sessions.error}/><div className="table-wrap"><table><thead><tr><th>预约人</th><th>预约时间</th><th>座位</th><th>状态</th><th>操作</th></tr></thead><tbody>{data.reservations.map(r => <tr key={r.id}><td>{r.user.name}<small>学号 {r.user.studentId} · {r.user.role === 'USER' ? '学员' : '管理员'}</small></td><td>{formatDate(r.startsAt)}<small>{formatTime(r.startsAt)} – {formatTime(r.endsAt)}</small></td><td><span className="seat-pill">{r.seat.code}</span></td><td><span className={`badge ${r.cancelledAt ? '' : 'green'}`}>{r.cancelledAt ? '已取消' : '已预约'}</span></td><td>{!r.cancelledAt && new Date(r.startsAt) > new Date() && <button disabled={busy === r.id} className="text-button" onClick={async () => { if (!confirm('确认取消此预约？'))
         return; setBusy(r.id); try {
         await api(`reservations/${r.id}`, 'DELETE');
         await reload();
@@ -181,7 +207,7 @@ function ReservationAdmin({ notify }: Props) {
         setBusy('');
     } }}>取消预约</button>}</td></tr>)}</tbody></table>{!data.reservations.length && <p className="table-empty">暂无座位预约</p>}</div></>;
 }
-const actionNames: Record<string, string> = { USER_UPDATE: '修改用户', GROUP_SAVE: '保存分组权限', VENUE_CREATE: '创建场地', LAYOUT_CREATE: '创建布局版本', LAYOUT_SAVE: '保存布局', LAYOUT_PUBLISH: '发布布局', COURSE_SAVE: '保存课程', SESSION_SAVE: '保存场次', RESERVATION_CREATE: '预约座位', RESERVATION_CANCEL: '取消预约', COVERAGE_CREATE: '登记助教保障', COVERAGE_CANCEL: '取消助教保障' };
+const actionNames: Record<string, string> = { USER_UPDATE: '修改用户', GROUP_SAVE: '保存分组权限', VENUE_CREATE: '创建场地', LAYOUT_CREATE: '创建布局版本', LAYOUT_SAVE: '保存布局', LAYOUT_PUBLISH: '发布布局', COURSE_SAVE: '保存课程', SESSION_SAVE: '保存场次', RESERVATION_CREATE: '预约座位', RESERVATION_CANCEL: '取消预约', COVERAGE_CREATE: '登记助教保障', COVERAGE_CANCEL: '取消助教保障', BOOKING_BLOCK_CREATE: '禁用预约', BOOKING_BLOCK_REMOVE: '恢复预约', BOOKING_BLOCK_APPLY: '处理禁用范围预约', SESSION_ADMIN_UNREADY: '管理员工位取消' };
 function Logs() {
     const { data, error } = useResource<{
         logs: {

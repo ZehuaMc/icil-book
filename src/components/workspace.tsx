@@ -3,8 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Armchair, LayoutGrid, CalendarDays, ClipboardList, ArrowUpRight, ArrowRight, ChevronLeft, ChevronRight, Check, Clock3, MapPin, Users, ShieldCheck, LogOut, Leaf, Bell, X, LoaderCircle, Settings2, PanelTop, CircleHelp, UserRound, Eye, EyeOff, KeyRound } from 'lucide-react';
-import { api, type User, type Session, type Seat, type Reservation, type Coverage, type Layout, type UserNotification } from '@/lib/types';
-import { formatDate, formatTime, localParts, groupAllows } from '@/lib/rules';
+import { api, subscribeToLayoutUpdates, type User, type Session, type Seat, type Reservation, type Coverage, type Layout, type UserNotification } from '@/lib/types';
+import { formatDate, formatTime, localParts, groupAllows, maxMemberBookingInput } from '@/lib/rules';
 import SeatMap from './seat-map';
 import Admin from './admin';
 import Modal from './modal';
@@ -113,11 +113,13 @@ function BookingHome({ user, notify }: {
         sessions: Session[];
     }>('sessions'); setSessions(data.sessions); const mineSession = data.sessions.find(s => s.reservations.some(r => r.mine)); setSelectedId(prev => data.sessions.some(s => s.id === prev) ? prev : mineSession?.id ?? data.sessions[0]?.id ?? ''); setDate(prev => data.sessions.some(s => localParts(s.startsAt).date === prev) ? prev : localParts(mineSession?.startsAt ?? data.sessions[0]?.startsAt ?? new Date()).date); }, []);
     useEffect(() => { load().catch(e => setError(e.message)).finally(() => setLoading(false)); }, [load, user]);
-    useEffect(() => { const interval = setInterval(() => load().catch(() => { }), 20000); return () => clearInterval(interval); }, [load]);
+    useEffect(() => { const interval = setInterval(() => load().catch(() => { }), 5000); return () => clearInterval(interval); }, [load]);
+    useEffect(() => subscribeToLayoutUpdates(() => load().catch(() => { })), [load]);
     const dates = [...new Set(sessions.map(s => localParts(s.startsAt).date))];
     const dateSessions = sessions.filter(s => localParts(s.startsAt).date === date);
     const session = dateSessions.find(s => s.id === selectedId) ?? dateSessions[0];
     const venueDisplayName = '人工智能与低空技术学院';
+    const icilMember = user?.role === 'USER' && user.memberType === 'ICIL';
     useEffect(() => {
         if (dateSessions.length && !dateSessions.some(s => s.id === selectedId)) setSelectedId(dateSessions[0].id);
     }, [date, selectedId, sessions]);
@@ -128,11 +130,13 @@ function BookingHome({ user, notify }: {
             setConfirm(false);
         }
     }, [session, seat]);
-    const adminReady = !!session?.open;
+    const adminReady = !!session && (icilMember || !!session.open);
     const timeOpened = adminReady;
     const mine = session?.reservations.find(r => r.mine);
     const bookingStartsAt = mine?.startsAt ?? session?.startsAt;
     const bookingEndsAt = mine?.endsAt ?? session?.endsAt;
+    const displayStartsAt = mine?.startsAt ?? (bookingStart ? shanghaiDateTimeValue(bookingStart) : session?.startsAt);
+    const displayEndsAt = mine?.endsAt ?? (bookingEnd ? shanghaiDateTimeValue(bookingEnd) : session?.endsAt);
     const canCheckIn = !!mine && !!bookingStartsAt && !mine.checkedInAt && Date.now() >= new Date(bookingStartsAt).getTime() - 10 * 60_000 && Date.now() <= new Date(bookingStartsAt).getTime() + 10 * 60_000;
     const checkIn = async () => {
         if (!mine?.id || busy) return;
@@ -143,6 +147,13 @@ function BookingHome({ user, notify }: {
     };
     const chosenStart = bookingStart ? shanghaiDateTimeValue(bookingStart) : null;
     const chosenEnd = bookingEnd ? shanghaiDateTimeValue(bookingEnd) : null;
+    const sessionStartField = session ? shanghaiDateTimeInput(session.startsAt) : '';
+    const sessionEndField = session ? shanghaiDateTimeInput(session.endsAt) : '';
+    const icilEarliestField = session ? shanghaiDateTimeInput(new Date(Math.max(new Date(session.startsAt).getTime(), Math.ceil(Date.now() / 60000) * 60000))) : '';
+    const icilLatestField = session ? [sessionEndField, maxMemberBookingInput()].sort()[0] : '';
+    const timeFieldMin = icilMember ? icilEarliestField : sessionStartField;
+    const timeFieldMax = isOperator(user) ? sessionEndField : icilMember ? icilLatestField : maxMemberBookingInput();
+    const selectedBookingBlock = !!session && !!chosenStart && !!chosenEnd && !!session.bookingBlocks?.some(block => new Date(block.startsAt) < chosenEnd && new Date(block.endsAt) > chosenStart);
     const selectedSeatOccupied = !!seat && !!chosenStart && !!chosenEnd && !!session?.reservations.some(r => r.seatId === seat.id && r.startsAt && r.endsAt && new Date(r.startsAt) < chosenEnd && new Date(r.endsAt) > chosenStart);
     useEffect(() => {
         if (selectedSeatOccupied) {
@@ -152,11 +163,13 @@ function BookingHome({ user, notify }: {
     }, [selectedSeatOccupied]);
     const intervalInsideSession = !!session && !!chosenStart && !!chosenEnd && chosenStart >= new Date(session.startsAt) && chosenEnd <= new Date(session.endsAt);
     const intervalValid = intervalInsideSession && !!chosenStart && !!chosenEnd && chosenStart > new Date() && chosenEnd > chosenStart;
-    const intervalAllowed = !!user && !!session && (isOperator(user) || (!!chosenStart && !!chosenEnd && groupAllows(user.group, chosenStart, chosenEnd)));
-    const ready = !!user && !!session && session.open && timeOpened && intervalValid && intervalAllowed && !mine;
+    const intervalAllowed = !!user && !!session && (isOperator(user) || user.memberType === 'ICIL' || (!!chosenStart && !!chosenEnd && groupAllows(user.group, chosenStart, chosenEnd)));
+    const ready = !!user && !!session && !session.bookingBlocked && !selectedBookingBlock && (isOperator(user) || user.memberType === 'ICIL' || (session.open && timeOpened && session.hasAdminSeat !== false)) && intervalValid && intervalAllowed && !mine;
     const canUseAssistantSeats = isOperator(user);
     const available = session ? session.layout.seats.filter(s => s.enabled && (canUseAssistantSeats || !s.fixedForAssistant) && !session.reservations.some(r => r.seatId === s.id && r.startsAt && r.endsAt && chosenStart && chosenEnd && new Date(r.startsAt) < chosenEnd && new Date(r.endsAt) > chosenStart)).length : 0;
-    const reason = !user ? '登录后即可选择心仪的座位' : !session?.open ? '此时段暂未开放预约' : !timeOpened ? '等待管理员或助教选定此时段' : mine ? `已为你保留 ${session?.layout.seats.find(s => s.id === mine.seatId)?.code} 号座位` : !intervalInsideSession ? '请选择管理员开放时间内的预约区间' : !chosenStart || chosenStart <= new Date() ? '预约开始时间必须晚于当前时间' : !chosenEnd || chosenEnd <= chosenStart ? '预约结束时间必须晚于开始时间' : !intervalAllowed ? '你的分组不允许预约此时间段' : '在平面图中选择一个心仪的位置';
+    const assistantPresent = session?.staffPresenceWindows?.some(window => !!chosenStart && !!chosenEnd && new Date(window.startsAt) < chosenEnd && new Date(window.endsAt) > chosenStart) ?? !!session?.assistantPresent;
+    const assistantStatus = assistantPresent ? '所选时间有助教在场。' : '所选时间暂无助教在场。';
+    const reason = `${assistantStatus} ${!user ? '登录后即可选择心仪的座位' : selectedBookingBlock ? '管理员已禁用所选时间，无法预约' : session?.bookingBlocked ? '该日期已禁用预约' : user.memberType === 'YSYX' && !session?.open ? '此时段暂未开放预约' : user.memberType === 'YSYX' && session?.hasAdminSeat === false ? '当前时段暂无管理员工位，暂不能预约' : !timeOpened && user.memberType !== 'ICIL' ? '等待管理员或助教选定此时段' : mine ? `已为你保留 ${session?.layout.seats.find(s => s.id === mine.seatId)?.code} 号座位` : !intervalInsideSession ? (icilMember ? '预约时间必须在所选日期内' : '请选择管理员开放时间内的预约区间') : !chosenStart || chosenStart <= new Date() ? '预约开始时间必须晚于当前时间' : !chosenEnd || chosenEnd <= chosenStart ? '预约结束时间必须晚于开始时间' : !intervalAllowed ? '你的分组不允许预约此时间段' : '在平面图中选择一个心仪的位置'}`;
     const cancelMine = async () => {
         if (!mine || !mine.id || busy) return;
         if (!window.confirm('确认取消此预约？座位将立即释放。')) return;
@@ -175,15 +188,28 @@ function BookingHome({ user, notify }: {
         }
     };
     const roleHeading = isOperator(user) ? '管理员' : user?.role === 'USER' ? '学员' : '';
-    useEffect(() => { if (session) { setBookingStart(shanghaiDateTimeInput(session.startsAt)); setBookingEnd(shanghaiDateTimeInput(session.endsAt)); } }, [session?.id]);
+    useEffect(() => { if (session) {
+        if (icilMember) {
+            const now = new Date();
+            const rounded = new Date(Math.ceil(now.getTime() / 60000) * 60000);
+            const startsAt = rounded > new Date(session.startsAt) ? rounded : new Date(session.startsAt);
+            const endsAt = new Date(Math.min(startsAt.getTime() + 60 * 60000, new Date(session.endsAt).getTime()));
+            setBookingStart(shanghaiDateTimeInput(startsAt));
+            setBookingEnd(shanghaiDateTimeInput(endsAt));
+        }
+        else {
+            setBookingStart(shanghaiDateTimeInput(session.startsAt));
+            setBookingEnd(shanghaiDateTimeInput(session.endsAt));
+        }
+    } }, [session?.id, icilMember]);
     useEffect(() => { if (mine?.startsAt && mine.endsAt) { setBookingStart(shanghaiDateTimeInput(mine.startsAt)); setBookingEnd(shanghaiDateTimeInput(mine.endsAt)); } }, [mine?.id]);
-    return <><div className="page-heading"><div><div className="eyebrow">A PLACE TO FOCUS</div><h1>{user ? `${roleHeading}，找到你的好位置。` : '给下一次灵感，留个位置。'}</h1><p>选择日期和时间段，开启一段专注的学习时光。</p></div><Link className="button secondary" href="/my-reservations"><ClipboardList size={16}/>我的预约<ArrowUpRight size={15}/></Link></div>
-    <div className="intro-strip"><div className="intro-icon"><Leaf size={20}/></div><span>空间为学习而开放</span><p>管理员先选择时段和工位，开放后学员即可预约。每人每场可预约一个工位。</p><span className="strip-tag">专注 · 共享 · 创造</span></div>
+    return <><div className="page-heading"><div><div className="eyebrow">A PLACE TO FOCUS</div><h1>{user ? `${roleHeading}，找到你的好位置。` : '给下一次灵感，留个位置。'}</h1><p>{icilMember ? '选择日期和任意时间，查看工位并完成预约。' : '选择日期和时间段，开启一段专注的学习时光。'}</p></div><Link className="button secondary" href="/my-reservations"><ClipboardList size={16}/>我的预约<ArrowUpRight size={15}/></Link></div>
+    <div className="intro-strip"><div className="intro-icon"><Leaf size={20}/></div><span>空间为学习而开放</span><p>{icilMember ? 'ICIL成员可在今天和明天自由选择预约时间；管理员禁用的时段除外。' : '管理员先选择时段和工位，开放后学员即可预约。每人每场可预约一个工位。'}</p><span className="strip-tag">专注 · 共享 · 创造</span></div>
     <section className="date-section"><div className="section-top"><h2><CalendarDays size={19}/>选择日期<span>01 / DATE</span></h2><span className="muted small">{date ? `${date.slice(0, 4)} 年 ${Number(date.slice(5, 7))} 月` : ''}</span></div><div className="date-row"><button className="date-arrow" aria-label="前一个日期" disabled={dates.indexOf(date) <= 0} onClick={() => setDate(dates[dates.indexOf(date) - 1])}><ChevronLeft size={18}/></button><div className="date-scroll">{dates.length ? dates.map(d => <button key={d} aria-label={`选择日期 ${d}`} className={`date-item ${date === d ? 'selected' : ''}`} onClick={() => setDate(d)}><span>{new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', weekday: 'short' }).format(new Date(`${d}T12:00:00+08:00`))}</span><strong>{Number(d.slice(8))}</strong></button>) : <p className="muted">暂无已安排的课程日期</p>}</div><button className="date-arrow" aria-label="后一个日期" disabled={dates.indexOf(date) >= dates.length - 1} onClick={() => setDate(dates[dates.indexOf(date) + 1])}><ChevronRight size={18}/></button></div></section>
-    {loading ? <div className="loading"><LoaderCircle className="spin"/>正在加载预约时段…</div> : error ? <p className="form-error" role="alert">{error}<button onClick={() => load().then(() => setError('')).catch(e => setError(e.message))}>重试</button></p> : !session ? <Empty title="暂时没有开放时段" description="管理员还未开放未来预约时段，请稍后再来。"/> : <div className="booking-grid"><div className="booking-main"><section><div className="section-top"><h2><Clock3 size={19}/>选择时间段<span>02 / TIME</span></h2><span className="muted small">共 {dateSessions.length} 个时段</span></div><div className="session-cards">{dateSessions.map(s => <button key={s.id} aria-label={`选择时间段 ${formatTime(s.startsAt)} 至 ${formatTime(s.endsAt)}`} className={`session-card ${s.id === session.id ? 'selected' : ''}`} onClick={() => setSelectedId(s.id)}><p className="session-time"><Clock3 size={15}/>{formatTime(s.startsAt)} – {formatTime(s.endsAt)}</p></button>)}</div></section>
-      <section className="booking-time-select"><div className="section-top"><h2><Clock3 size={19}/>我的预约时间<span>03 / TIME RANGE</span></h2><span className="muted small">开放范围：{formatTime(session.startsAt)} – {formatTime(session.endsAt)}</span></div><div className="booking-time-fields"><label>开始<input type="datetime-local" required min={shanghaiDateTimeInput(session.startsAt)} max={shanghaiDateTimeInput(session.endsAt)} value={bookingStart} onChange={e => setBookingStart(e.target.value)}/></label><label>结束<input type="datetime-local" required min={shanghaiDateTimeInput(session.startsAt)} max={shanghaiDateTimeInput(session.endsAt)} value={bookingEnd} onChange={e => setBookingEnd(e.target.value)}/></label><p className="muted small">座位状态会按所选时间段检查冲突。</p></div></section>
+    {loading ? <div className="loading"><LoaderCircle className="spin"/>正在加载预约信息…</div> : error ? <p className="form-error" role="alert">{error}<button onClick={() => load().then(() => setError('')).catch(e => setError(e.message))}>重试</button></p> : !session ? <Empty title={icilMember ? '暂时没有可用布局' : '暂时没有开放时段'} description={icilMember ? '管理员尚未发布可预约布局，请稍后再来。' : '管理员还未开放未来预约时段，请稍后再来。'}/> : <div className="booking-grid"><div className="booking-main">{!icilMember && <section><div className="section-top"><h2><Clock3 size={19}/>选择时间段<span>02 / TIME</span></h2><span className="muted small">共 {dateSessions.length} 个时段</span></div><div className="session-cards">{dateSessions.map(s => <button key={s.id} aria-label={`选择时间段 ${formatTime(s.startsAt)} 至 ${formatTime(s.endsAt)}`} className={`session-card ${s.id === session.id ? 'selected' : ''}`} onClick={() => setSelectedId(s.id)}><p className="session-time"><Clock3 size={15}/>{formatTime(s.startsAt)} – {formatTime(s.endsAt)}</p></button>)}</div></section>}
+      <section className="booking-time-select"><div className="section-top"><h2><Clock3 size={19}/>{icilMember ? '选择预约时间' : '我的预约时间'}<span>{icilMember ? '02 / TIME RANGE' : '03 / TIME RANGE'}</span></h2><span className="muted small">{icilMember ? `所选日期：${date}` : `开放范围：${formatTime(session.startsAt)} – ${formatTime(session.endsAt)}`}</span></div><div className="booking-time-fields"><label>开始<input type="datetime-local" required min={timeFieldMin} max={timeFieldMax} value={bookingStart} onChange={e => setBookingStart(e.target.value)}/></label><label>结束<input type="datetime-local" required min={bookingStart || timeFieldMin} max={timeFieldMax} value={bookingEnd} onChange={e => setBookingEnd(e.target.value)}/></label><p className="muted small">{icilMember ? 'ICIL成员可在所选日期内自由选择任意分钟的时间，不受管理员开放时段限制；管理员禁用的时段不可预约。' : '座位状态会按所选时间段检查冲突。'}</p></div></section>
       <section className="map-section"><div className="section-top"><h2><Armchair size={19}/>选择工位<span>04 / YOUR SEAT</span></h2><div className="map-legend"><span><i className="legend-available"/>可预约</span><span><i className="legend-booked"/>已预约</span><span><i className="legend-mine"/>本人 / 选中</span><span><i className="legend-disabled"/>停用 / {canUseAssistantSeats ? '助教固定工位可选' : '助教固定工位'}</span></div></div><div className="map-card"><div className="map-caption"><span><MapPin size={14}/>{venueDisplayName}</span><span>{venueDisplayName} · {session.layout.name}</span></div><div className="map-stage"><SeatMap layout={session.layout} session={session} canSelectFixed={canUseAssistantSeats} intervalStart={chosenStart ?? undefined} intervalEnd={chosenEnd ?? undefined} selected={seat?.id} disabled={!ready} onSelect={s => { setSeat(s); setConfirm(false); }}/></div><div className="map-bottom"><span className="online-dot"/><span>共 {session.layout.seats.filter(s => s.enabled && (canUseAssistantSeats || !s.fixedForAssistant)).length} 个可预约工位</span><span className="muted">·</span><strong>{available} 个可预约</strong><span className="map-auto">座位状态每 20 秒更新</span></div></div></section>
-    </div><aside className="booking-aside"><div className="booking-summary"><div className="summary-title"><h2>这一次，坐这里</h2><Armchair size={21}/></div><p className="summary-subtitle">YOUR NEXT LEARNING MOMENT</p><dl className="summary-details"><div><dt><CalendarDays size={15}/>日期</dt><dd>{formatDate(bookingStartsAt ?? session.startsAt)}</dd></div><div><dt><Clock3 size={15}/>时间</dt><dd>{formatTime(bookingStartsAt ?? session.startsAt)} – {formatTime(bookingEndsAt ?? session.endsAt)}</dd></div><div><dt><MapPin size={15}/>场地</dt><dd>{venueDisplayName}</dd></div></dl><div className={`coverage-box ${timeOpened ? '' : 'waiting'}`}><ShieldCheck size={18}/><div><strong>{timeOpened ? '时间已开放预约' : '等待选定时间'}</strong><small>{session.coverage.length} / {session.requiredAssistants} 位助教已登记 · {adminReady ? '管理员已选定此时间' : timeOpened ? '助教保障已就绪' : '暂未开放选座'}</small></div></div><div className={`chosen-seat ${seat || mine ? 'has-seat' : ''}`}><Armchair size={28} strokeWidth={1.4}/><div><small>{mine ? '你的预约座位' : seat ? '已选座位' : '尚未选择工位'}</small><strong>{mine ? session.layout.seats.find(s => s.id === mine.seatId)?.code : seat?.code ?? '等待你的选择'}</strong></div></div><p className="selection-hint">{reason}</p>{!user ? <Link className="button primary wide" href="/login">登录后预约<ArrowRight size={16}/></Link> : mine ? <div className="booking-actions"><button className="primary wide" disabled={busy || !!mine.checkedInAt || !canCheckIn} onClick={checkIn}>{mine.checkedInAt ? '已完成打卡' : canCheckIn ? '现在打卡' : '开始前后 10 分钟可打卡'}</button><button className="wide" disabled={busy || !bookingStartsAt || new Date(bookingStartsAt) <= new Date()} onClick={cancelMine}>{busy ? '正在取消…' : '取消预约'}</button></div> : <button className="primary wide" disabled={!ready || !seat} onClick={() => setConfirm(true)}>确认预约<ArrowRight size={16}/></button>}<p className="cancel-note">预约开始前可在本页取消；开始前后 10 分钟可打卡</p></div><div className="guidelines"><span className="eyebrow">A LITTLE REMINDER</span><h3>让好空间，被好好使用。</h3><p>按时到场，保持安静与整洁。<br />计划有变？记得把位置留给需要的人。</p></div></aside></div>}
+    </div><aside className="booking-aside"><div className="booking-summary"><div className="summary-title"><h2>这一次，坐这里</h2><Armchair size={21}/></div><p className="summary-subtitle">YOUR NEXT LEARNING MOMENT</p><dl className="summary-details"><div><dt><CalendarDays size={15}/>日期</dt><dd>{formatDate(displayStartsAt ?? session.startsAt)}</dd></div><div><dt><Clock3 size={15}/>时间</dt><dd>{formatTime(displayStartsAt ?? session.startsAt)} – {formatTime(displayEndsAt ?? session.endsAt)}</dd></div><div><dt><MapPin size={15}/>场地</dt><dd>{venueDisplayName}</dd></div></dl><div className={`coverage-box ${timeOpened ? '' : 'waiting'}`}><ShieldCheck size={18}/><div><strong>{icilMember ? selectedBookingBlock ? '该时段已禁用' : '全天均可预约' : timeOpened ? '时间已开放预约' : '等待选定时间'}</strong><small>{icilMember ? assistantPresent ? '所选时间有助教在场' : '可在今天和明天自由选择时间' : `${session.coverage.length} / ${session.requiredAssistants} 位助教已登记 · ${adminReady ? '管理员已选定此时间' : timeOpened ? '助教保障已就绪' : '暂未开放选座'}`}</small></div></div><div className={`chosen-seat ${seat || mine ? 'has-seat' : ''}`}><Armchair size={28} strokeWidth={1.4}/><div><small>{mine ? '你的预约座位' : seat ? '已选座位' : '尚未选择工位'}</small><strong>{mine ? session.layout.seats.find(s => s.id === mine.seatId)?.code : seat?.code ?? '等待你的选择'}</strong></div></div><p className="selection-hint">{reason}</p>{!user ? <Link className="button primary wide" href="/login">登录后预约<ArrowRight size={16}/></Link> : mine ? <div className="booking-actions"><button className="primary wide" disabled={busy || !!mine.checkedInAt || !canCheckIn} onClick={checkIn}>{mine.checkedInAt ? '已完成打卡' : canCheckIn ? '现在打卡' : '开始前后 10 分钟可打卡'}</button><button className="wide" disabled={busy || !bookingStartsAt || new Date(bookingStartsAt) <= new Date()} onClick={cancelMine}>{busy ? '正在取消…' : '取消预约'}</button></div> : <button className="primary wide" disabled={!ready || !seat} onClick={() => setConfirm(true)}>确认预约<ArrowRight size={16}/></button>}<p className="cancel-note">预约开始前可在本页取消；开始前后 10 分钟可打卡</p></div><div className="guidelines"><span className="eyebrow">A LITTLE REMINDER</span><h3>让好空间，被好好使用。</h3><p>按时到场，保持安静与整洁。<br />计划有变？记得把位置留给需要的人。</p></div></aside></div>}
     {confirm && session && seat && <Modal title={`为你留住 ${seat.code} 号工位？`} close={() => !busy && setConfirm(false)}><span className="modal-icon"><Armchair size={28}/></span><h2 id="confirm-title">为你留住 {seat.code} 号工位？</h2><p className="muted">{formatDate(bookingStart)} · {formatTime(bookingStart)} – {formatTime(bookingEnd)}</p><div className="modal-actions"><button disabled={busy} onClick={() => setConfirm(false)}>再想一下</button><button className="primary" disabled={busy || !intervalValid || selectedSeatOccupied} onClick={async () => { setBusy(true); try {
         await api('reservations', 'POST', { sessionId: session.id, seatId: seat.id, startsAt: `${bookingStart}:00+08:00`, endsAt: `${bookingEnd}:00+08:00` });
         notify(`预约成功，${seat.code} 号工位等你来`);
