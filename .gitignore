@@ -1,5 +1,6 @@
 node_modules/
 .next/
+.next-stale/
 .next-main/
 .next-user/
 .next-admin/
