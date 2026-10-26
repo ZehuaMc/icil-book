@@ -9,10 +9,10 @@ import { currentUser, requireUser, createLogin, publicUser, hashToken, isOperato
 import { check, HttpError } from '@/lib/errors';
 import { assertSameOrigin, readJson as body } from '@/lib/request';
 import { reserveSeat, cancelReservation, checkInReservation, replaceAdminSeat, addCoverage, createAssistantSession, removeCoverage, expireUnconfirmedReservations, audit } from '@/lib/bookings';
-import { groupAllows } from '@/lib/rules';
+import { groupAllows, maxMemberBookingTime, localParts } from '@/lib/rules';
 import { password, studentId, groupSchema, courseSchema, layoutSchema, sessionSchema, id } from '@/lib/validation';
 export const runtime = 'nodejs';
-const sessionInclude = { course: true, layout: { include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' as const } } } }, coverage: { include: { assistant: { select: { id: true, name: true } } } }, adminBookings: { include: { admin: { select: { id: true, name: true } } } }, reservations: { where: { cancelledAt: null }, select: { id: true, userId: true, seatId: true, startsAt: true, endsAt: true, checkedInAt: true } } } as const;
+const sessionInclude = { course: true, layout: { include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' as const } } } }, coverage: { include: { assistant: { select: { id: true, name: true } } } }, adminBookings: { include: { admin: { select: { id: true, name: true } } } }, reservations: { where: { cancelledAt: null }, select: { id: true, userId: true, seatId: true, startsAt: true, endsAt: true, checkedInAt: true, user: { select: { role: true } } } } } as const;
 const recordInclude = { session: { include: { course: true, layout: { include: { venue: true } } } }, seat: true, user: { select: { id: true, name: true, studentId: true, email: true, role: true } } } as const;
 const ADMIN_REGISTRATION_KEY = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
 type SessionView = Prisma.SessionGetPayload<{ include: typeof sessionInclude }>;
@@ -61,6 +61,99 @@ function mergeOpenSessionViews(sessions: SessionView[], userId?: string) {
             coverage,
         } satisfies SessionView;
     });
+}
+function shanghaiDayRange(dateKey: string) {
+    const start = new Date(`${dateKey}T00:00:00+08:00`);
+    const end = new Date(start.getTime() + 86400000);
+    check(!Number.isNaN(start.getTime()) && localParts(start).date === dateKey, '日期无效', 400);
+    return { start, end };
+}
+function icilDateKeys(now = new Date()) {
+    return [localParts(now).date, localParts(new Date(now.getTime() + 86400000)).date];
+}
+function icilDayId(venueId: string, dateKey: string) {
+    return `icil-${venueId}-${dateKey}`;
+}
+/**
+ * ICIL members do not depend on an administrator-created session.  We still
+ * keep their reservations attached to a real Session row so the existing
+ * reservation, cancellation, check-in and audit flows remain transactional.
+ * One hidden all-day container is kept per venue and calendar day.
+ */
+async function ensureIcilDaySessions() {
+    const dateKeys = icilDateKeys();
+    const layouts = await db.layoutVersion.findMany({
+        where: { status: 'PUBLISHED' },
+        select: { id: true, venueId: true, publishedAt: true, createdAt: true },
+        orderBy: [{ publishedAt: 'desc' }, { createdAt: 'desc' }],
+    });
+    const latestByVenue = new Map<string, (typeof layouts)[number]>();
+    for (const layout of layouts)
+        if (!latestByVenue.has(layout.venueId)) latestByVenue.set(layout.venueId, layout);
+    const course = await db.course.findFirst({ orderBy: { id: 'asc' }, select: { id: true } });
+    if (!course)
+        return [] as string[];
+    return serial(async (tx) => {
+        const ids: string[] = [];
+        for (const layout of latestByVenue.values()) for (const dateKey of dateKeys) {
+            const { start, end } = shanghaiDayRange(dateKey);
+            const sessionId = icilDayId(layout.venueId, dateKey);
+            const existing = await tx.session.upsert({
+                where: { id: sessionId },
+                create: { id: sessionId, courseId: course.id, layoutId: layout.id, startsAt: start, endsAt: end, requiredAssistants: 1, open: true, icilOnly: true },
+                update: {},
+                select: { id: true, layoutId: true, icilOnly: true },
+            });
+            check(existing.icilOnly, 'ICIL全天预约记录标识冲突', 409);
+            {
+                // A published layout can change while some ICIL seats are
+                // reserved. Keep those reservations by seat code when the new
+                // layout contains them, then move the all-day container over.
+                if (existing.layoutId !== layout.id) {
+                    const activeReservations = await tx.reservation.findMany({ where: { sessionId, cancelledAt: null }, include: { seat: { select: { code: true } } } });
+                    const targetSeats = await tx.seat.findMany({ where: { layoutId: layout.id }, select: { id: true, code: true } });
+                    const targetSeatByCode = new Map(targetSeats.map(seat => [seat.code, seat.id]));
+                    if (activeReservations.every(reservation => targetSeatByCode.has(reservation.seat.code))) {
+                        for (const reservation of activeReservations)
+                            await tx.reservation.update({ where: { id: reservation.id }, data: { seatId: targetSeatByCode.get(reservation.seat.code)! } });
+                        await tx.session.update({ where: { id: sessionId }, data: { layoutId: layout.id, startsAt: start, endsAt: end, open: true, cancelledAt: null } });
+                    }
+                }
+            }
+            ids.push(sessionId);
+        }
+        return ids;
+    });
+}
+async function cancelReservationsInRange(tx: Prisma.TransactionClient, actorId: string, startsAt: Date, endsAt: Date, reason: string, onlySessionIds?: string[], icilVenueId?: string) {
+    const sessionScope = onlySessionIds
+        ? icilVenueId
+            ? { OR: [{ id: { in: onlySessionIds } }, { icilOnly: true, layout: { venueId: icilVenueId } }] }
+            : { id: { in: onlySessionIds } }
+        : {};
+    const sessions = await tx.session.findMany({
+        where: { ...sessionScope, startsAt: { lt: endsAt }, endsAt: { gt: startsAt }, cancelledAt: null },
+        select: { id: true, startsAt: true, endsAt: true },
+    });
+    const sessionIds = sessions.map(session => session.id);
+    if (!sessionIds.length)
+        return { sessions: 0, reservations: 0 };
+    const records = await tx.reservation.findMany({
+        where: { sessionId: { in: sessionIds }, cancelledAt: null, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
+        select: { id: true, userId: true, sessionId: true, seat: { select: { code: true } }, user: { select: { role: true } } },
+    });
+    const now = new Date();
+    if (records.length)
+        await tx.reservation.updateMany({ where: { id: { in: records.map(record => record.id) } }, data: { cancelledAt: now } });
+    const learnerRecords = records.filter(record => record.user.role === 'USER');
+    if (learnerRecords.length) {
+        await tx.notification.createMany({ data: learnerRecords.map(record => ({ recipientId: record.userId, type: 'BOOKING_CANCELLED', message: `预约时段因管理员禁用${reason ? `（${reason}）` : ''}已取消，你的${record.seat.code}号工位已释放。` })) });
+    }
+    await tx.sessionAdminBooking.deleteMany({ where: { sessionId: { in: sessionIds } } });
+    await tx.session.updateMany({ where: { id: { in: sessionIds }, icilOnly: false }, data: { open: false } });
+    for (const session of sessions)
+        await audit(tx, actorId, 'BOOKING_BLOCK_APPLY', session.id, { reason, cancelledReservations: records.filter(record => record.sessionId === session.id).length });
+    return { sessions: sessions.length, reservations: records.length };
 }
 async function dispatch(req: NextRequest, path: string[]) {
     const method = req.method, key = path.join('/');
@@ -152,9 +245,47 @@ async function dispatch(req: NextRequest, path: string[]) {
         // already-started slot visible and then make every seat appear
         // disabled; active reservations remain available from the records page
         // for check-in and cancellation rules.
-        const sessions = await db.session.findMany({ where: { endsAt: { gt: new Date() }, open: true, cancelledAt: null }, include: sessionInclude, orderBy: { startsAt: 'asc' }, take: 100 });
-        const mergedSessions = mergeOpenSessionViews(sessions, user?.id);
-        return { sessions: mergedSessions.map(s => ({ ...s, adminReady: true, allowed: !!user && (isOperator(user) || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })) })) };
+        const memberMax = !isOperator(user) ? maxMemberBookingTime() : undefined;
+        const icilMember = user?.role === 'USER' && user.memberType === 'ICIL';
+        let mergedSessions: (SessionView & { staffPresenceWindows?: { startsAt: Date; endsAt: Date }[] })[];
+        if (icilMember) {
+            const virtualIds = await ensureIcilDaySessions();
+            const virtualSessions = await db.session.findMany({ where: { id: { in: virtualIds }, endsAt: { gt: new Date() }, cancelledAt: null }, include: sessionInclude, orderBy: { startsAt: 'asc' } });
+            const dayStart = virtualSessions.reduce((min, s) => Math.min(min, s.startsAt.getTime()), Date.now());
+            const dayEnd = virtualSessions.reduce((max, s) => Math.max(max, s.endsAt.getTime()), memberMax?.getTime() ?? Date.now());
+            const actualSessions = await db.session.findMany({ where: { icilOnly: false, cancelledAt: null, endsAt: { gt: new Date(dayStart) }, startsAt: { lt: new Date(dayEnd) } }, include: sessionInclude });
+            mergedSessions = virtualSessions.map(virtual => {
+                const related = actualSessions.filter(actual => actual.layout.venueId === virtual.layout.venueId && actual.startsAt < virtual.endsAt && actual.endsAt > virtual.startsAt);
+                const targetSeats = new Map(virtual.layout.seats.map(seat => [seat.code, seat.id]));
+                const reservations = [...virtual.reservations];
+                for (const actual of related) {
+                    const sourceSeats = new Map(actual.layout.seats.map(seat => [seat.id, seat.code]));
+                    for (const reservation of actual.reservations) {
+                        const seatId = targetSeats.get(sourceSeats.get(reservation.seatId) ?? '');
+                        if (seatId && !reservations.some(existing => existing.id === reservation.id))
+                            reservations.push({ ...reservation, seatId });
+                    }
+                }
+                const adminBookings = [...new Map([...virtual.adminBookings, ...related.flatMap(s => s.adminBookings)].map(booking => [booking.adminId, booking])).values()];
+                const coverage = [...new Map([...virtual.coverage, ...related.flatMap(s => s.coverage)].map(record => [record.assistantId, record])).values()];
+                const staffPresenceWindows = related.flatMap(actual => [
+                    ...(actual.adminBookings.length || actual.coverage.length ? [{ startsAt: actual.startsAt, endsAt: actual.endsAt }] : []),
+                    ...actual.reservations.filter(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT').map(r => ({ startsAt: r.startsAt, endsAt: r.endsAt })),
+                ]);
+                return { ...virtual, reservations, adminBookings, coverage, staffPresenceWindows };
+            });
+        }
+        else {
+            const sessions = await db.session.findMany({ where: { endsAt: { gt: new Date() }, ...(memberMax ? { startsAt: { lt: memberMax } } : {}), open: true, cancelledAt: null, icilOnly: false }, include: sessionInclude, orderBy: { startsAt: 'asc' }, take: 100 });
+            // Open windows keep the existing union behavior for YSYX members.
+            mergedSessions = mergeOpenSessionViews(sessions, user?.id);
+        }
+        const blocks = await db.bookingBlock.findMany({ where: { active: true, startsAt: { lt: new Date(Math.max(...mergedSessions.map(s => s.endsAt.getTime()), Date.now())) }, endsAt: { gt: new Date() } }, orderBy: { startsAt: 'asc' } });
+        return { sessions: mergedSessions.map(s => {
+            const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt);
+            const fullSessionBlock = matchingBlocks.some(block => block.kind === 'DAY' || (block.startsAt <= s.startsAt && block.endsAt >= s.endsAt));
+            return { ...s, adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
+        }) };
     }
     const user = await requireUser();
     await expireUnconfirmedReservations();
@@ -211,6 +342,47 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (path[0] === 'reservations' && path[1] === 'coverage' && path.length === 3 && method === 'DELETE')
         return removeCoverage(user.id, path[2]);
     check(isOperator(user), '需要管理员权限', 403);
+    if (path[0] === 'admin' && path[1] === 'sessions' && path.length === 4 && path[3] === 'disable' && (method === 'POST' || method === 'DELETE')) {
+        return serial(async (tx) => {
+            const session = await tx.session.findUnique({ where: { id: path[2] } });
+            check(session, '场次不存在', 404);
+            check(!session.icilOnly, 'ICIL全天预约不能从管理员时段面板单独禁用', 409);
+            check(!session.cancelledAt, '已取消时段不能禁用', 409);
+            check(session.startsAt > new Date(), '已开始时段不能禁用', 409);
+            if (method === 'DELETE') {
+                await tx.bookingBlock.updateMany({ where: { sessionId: session.id, kind: 'SESSION', active: true }, data: { active: false } });
+                await audit(tx, user.id, 'BOOKING_BLOCK_REMOVE', session.id, { kind: 'SESSION' });
+                return { ok: true };
+            }
+            const data = z.object({ reason: z.string().trim().max(200).optional().default('') }).parse(await body(req));
+            const existing = await tx.bookingBlock.findFirst({ where: { sessionId: session.id, kind: 'SESSION', active: true } });
+            if (existing)
+                return { block: existing };
+            const layout = await tx.layoutVersion.findUniqueOrThrow({ where: { id: session.layoutId }, select: { venueId: true } });
+            const block = await tx.bookingBlock.create({ data: { kind: 'SESSION', sessionId: session.id, startsAt: session.startsAt, endsAt: session.endsAt, reason: data.reason, createdById: user.id } });
+            const result = await cancelReservationsInRange(tx, user.id, session.startsAt, session.endsAt, data.reason, [session.id], layout.venueId);
+            await audit(tx, user.id, 'BOOKING_BLOCK_CREATE', block.id, { kind: 'SESSION', sessionId: session.id, ...result, reason: data.reason });
+            return { block, ...result };
+        });
+    }
+    if (path[0] === 'admin' && path[1] === 'dates' && path.length === 4 && path[3] === 'disable' && (method === 'POST' || method === 'DELETE')) {
+        const { start, end } = shanghaiDayRange(path[2]);
+        return serial(async (tx) => {
+            if (method === 'DELETE') {
+                await tx.bookingBlock.updateMany({ where: { kind: 'DAY', startsAt: start, endsAt: end, active: true }, data: { active: false } });
+                await audit(tx, user.id, 'BOOKING_BLOCK_REMOVE', path[2], { kind: 'DAY', date: path[2] });
+                return { ok: true };
+            }
+            const data = z.object({ reason: z.string().trim().max(200).optional().default('') }).parse(await body(req));
+            const existing = await tx.bookingBlock.findFirst({ where: { kind: 'DAY', startsAt: start, endsAt: end, active: true } });
+            if (existing)
+                return { block: existing };
+            const block = await tx.bookingBlock.create({ data: { kind: 'DAY', startsAt: start, endsAt: end, reason: data.reason, createdById: user.id } });
+            const result = await cancelReservationsInRange(tx, user.id, start, end, data.reason);
+            await audit(tx, user.id, 'BOOKING_BLOCK_CREATE', block.id, { kind: 'DAY', date: path[2], ...result, reason: data.reason });
+            return { block, ...result };
+        });
+    }
     if (path[0] === 'admin' && path[1] === 'sessions' && path.length === 4 && path[3] === 'admin-seat' && method === 'PUT') {
         const data = z.object({ seatId: id }).parse(await body(req));
         return { reservation: await replaceAdminSeat(user.id, path[2], data.seatId) };
@@ -220,18 +392,19 @@ async function dispatch(req: NextRequest, path: string[]) {
             await tx.$queryRaw `SELECT id FROM "Session" WHERE id = ${path[2]} FOR UPDATE`;
             const session = await tx.session.findUnique({ where: { id: path[2] } });
             check(session, '场次不存在', 404);
+            check(!session.icilOnly, 'ICIL全天预约不支持管理员开放/暂停操作', 409);
             check(!session.cancelledAt, '此时段已取消，不能再次开放');
             check(session.startsAt > new Date(), '已开始场次不能修改');
             if (method === 'POST') {
                 check(!session.open, '此时间已经开放');
-                check(await tx.reservation.count({ where: { sessionId: session.id, cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } } } }) > 0, '请先选择至少一个管理员工位');
+                check(!await tx.bookingBlock.findFirst({ where: { active: true, startsAt: { lt: session.endsAt }, endsAt: { gt: session.startsAt } } }), '该时段或日期已禁用预约', 409);
                 const venueId = (await tx.layoutVersion.findUniqueOrThrow({ where: { id: session.layoutId } })).venueId;
                 // Merge transitively overlapping windows (2–6 plus 4–9 becomes 2–9).
                 let mergedStart = session.startsAt, mergedEnd = session.endsAt;
                 const overlapById = new Map<string, Awaited<ReturnType<typeof tx.session.findMany<{ include: { reservations: { include: { seat: true } }; layout: { include: { seats: true } } } }>>>[number]>();
                 for (;;) {
                     const found = await tx.session.findMany({
-                        where: { id: { not: session.id, notIn: [...overlapById.keys()] }, open: true, cancelledAt: null, layout: { venueId }, startsAt: { lt: mergedEnd }, endsAt: { gt: mergedStart } },
+                        where: { id: { not: session.id, notIn: [...overlapById.keys()] }, open: true, cancelledAt: null, icilOnly: false, layout: { venueId }, startsAt: { lt: mergedEnd }, endsAt: { gt: mergedStart } },
                         include: { reservations: { include: { seat: true } }, layout: { include: { seats: true } } },
                         orderBy: { startsAt: 'asc' },
                     });
@@ -244,6 +417,7 @@ async function dispatch(req: NextRequest, path: string[]) {
                 }
                 const overlaps = [...overlapById.values()];
                 check(mergedEnd.getTime() - mergedStart.getTime() <= 86400000, '合并后的开放时段不能超过 24 小时', 409);
+                check(!await tx.bookingBlock.findFirst({ where: { active: true, startsAt: { lt: mergedEnd }, endsAt: { gt: mergedStart } } }), '合并后的时段或日期已禁用预约', 409);
                 if (overlaps.length) {
                     const allReservations = await tx.reservation.findMany({
                         where: { sessionId: { in: [session.id, ...overlaps.map(other => other.id)] } },
@@ -267,13 +441,22 @@ async function dispatch(req: NextRequest, path: string[]) {
             }
             check(session.open, '此时间尚未开放');
             await tx.sessionAdminBooking.deleteMany({ where: { sessionId: session.id, adminId: user.id } });
+            const ysyxReservations = await tx.reservation.findMany({
+                where: { sessionId: session.id, cancelledAt: null, user: { role: 'USER', memberType: 'YSYX' } },
+                select: { id: true, userId: true, seat: { select: { code: true } } },
+            });
+            const cancelledAt = new Date();
+            if (ysyxReservations.length) {
+                await tx.reservation.updateMany({ where: { id: { in: ysyxReservations.map(record => record.id) } }, data: { cancelledAt } });
+                await tx.notification.createMany({ data: ysyxReservations.map(record => ({ recipientId: record.userId, type: 'BOOKING_CANCELLED', message: `管理员暂停了${session.startsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}至${session.endsAt.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}的预约，你的${record.seat.code}号工位已释放，请重新选择时段。` })) });
+            }
             await tx.session.update({ where: { id: session.id }, data: { open: false } });
-            await audit(tx, user.id, 'SESSION_ADMIN_UNREADY', session.id, { sessionId: session.id, preservesLearnerReservations: true });
-            return { ok: true };
+            await audit(tx, user.id, 'SESSION_ADMIN_UNREADY', session.id, { sessionId: session.id, cancelledYSYXReservations: ysyxReservations.length });
+            return { ok: true, cancelledYSYXReservations: ysyxReservations.length };
         });
     }
     if (key === 'admin/stats' && method === 'GET') {
-        const [users, sessions, reservations, layouts] = await Promise.all([db.user.count(), db.session.count({ where: { startsAt: { gte: new Date() } } }), db.reservation.count({ where: { cancelledAt: null } }), db.layoutVersion.count({ where: { status: 'PUBLISHED' } })]);
+        const [users, sessions, reservations, layouts] = await Promise.all([db.user.count(), db.session.count({ where: { startsAt: { gte: new Date() }, icilOnly: false } }), db.reservation.count({ where: { cancelledAt: null } }), db.layoutVersion.count({ where: { status: 'PUBLISHED' } })]);
         return { users, sessions, reservations, layouts };
     }
     if (key === 'admin/users' && method === 'GET')
@@ -291,17 +474,47 @@ async function dispatch(req: NextRequest, path: string[]) {
         });
     }
     if (path[0] === 'admin' && path[1] === 'users' && path.length === 3 && method === 'PATCH') {
-        const data = z.object({ name: z.string().trim().min(1).max(60), role: z.enum(['ADMIN', 'USER']), enabled: z.boolean(), groupId: id }).parse(await body(req));
+        const data = z.object({ name: z.string().trim().min(1).max(60), role: z.enum(['ADMIN', 'USER']), memberType: z.enum(['YSYX', 'ICIL']).default('YSYX'), enabled: z.boolean(), groupId: id }).parse(await body(req));
         return serial(async (tx) => {
             const target = await tx.user.findUnique({ where: { id: path[2] } });
             check(target, '用户不存在', 404);
             check(!target.deletedAt, '已注销账号不能再编辑', 409);
             if (isOperator(target) && (!data.enabled || data.role !== 'ADMIN'))
                 check(await tx.user.count({ where: { role: { in: ['ADMIN', 'ASSISTANT'] }, enabled: true, deletedAt: null } }) > 1, '必须保留至少一名启用的管理员');
-            const result = await tx.user.update({ where: { id: target.id }, data, select: publicUser });
+            const result = await tx.user.update({ where: { id: target.id }, data: { ...data, memberType: data.role === 'USER' ? data.memberType : 'YSYX' }, select: publicUser });
+            const downgradedFromIcil = target.role === 'USER' && target.memberType === 'ICIL' && data.role === 'USER' && data.memberType === 'YSYX';
+            let cancelledIcilReservations = 0;
+            if (downgradedFromIcil) {
+                const now = new Date();
+                const policyUser = await tx.user.findUniqueOrThrow({ where: { id: target.id }, include: { group: { include: { weeklyRules: true, dateRules: true } } } });
+                const candidates = await tx.reservation.findMany({
+                    where: { userId: target.id, cancelledAt: null, startsAt: { gt: now }, session: { cancelledAt: null } },
+                    include: { seat: { select: { code: true } }, session: { include: { layout: { select: { venueId: true } } } } },
+                });
+                const sessionIds = [...new Set(candidates.map(record => record.sessionId))];
+                for (const sessionId of sessionIds)
+                    await tx.$queryRaw`SELECT id FROM "Session" WHERE id = ${sessionId} FOR UPDATE`;
+                const cancelled: typeof candidates = [];
+                for (const record of candidates) {
+                    const session = await tx.session.findUniqueOrThrow({ where: { id: record.sessionId }, select: { open: true, cancelledAt: true, startsAt: true, endsAt: true, icilOnly: true, layout: { select: { venueId: true } } } });
+                    const [staffCount, block] = await Promise.all([
+                        tx.reservation.count({ where: { cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } }, startsAt: { lt: record.endsAt }, endsAt: { gt: record.startsAt }, session: { cancelledAt: null, layout: { venueId: session.layout.venueId }, startsAt: { lt: record.endsAt }, endsAt: { gt: record.startsAt } } } }),
+                        tx.bookingBlock.findFirst({ where: { active: true, startsAt: { lt: record.endsAt }, endsAt: { gt: record.startsAt } } }),
+                    ]);
+                    const validForYsyx = session.open && !session.cancelledAt && staffCount > 0 && !block && record.endsAt <= maxMemberBookingTime(now) && groupAllows(policyUser.group, record.startsAt, record.endsAt);
+                    if (!validForYsyx)
+                        cancelled.push(record);
+                }
+                if (cancelled.length) {
+                    const cancelledAt = new Date();
+                    await tx.reservation.updateMany({ where: { id: { in: cancelled.map(record => record.id) } }, data: { cancelledAt } });
+                    await tx.notification.createMany({ data: cancelled.map(record => ({ recipientId: target.id, type: 'BOOKING_CANCELLED', message: `${record.startsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}至${record.endsAt.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}的预约不符合YSYX成员规则，已自动取消，你的${record.seat.code}号工位已释放。` })) });
+                    cancelledIcilReservations = cancelled.length;
+                }
+            }
             if (!data.enabled)
                 await tx.authSession.deleteMany({ where: { userId: target.id } });
-            await audit(tx, user.id, 'USER_UPDATE', target.id, data);
+            await audit(tx, user.id, 'USER_UPDATE', target.id, { ...data, cancelledIcilReservations });
             return { user: result };
         });
     }
@@ -461,10 +674,25 @@ async function dispatch(req: NextRequest, path: string[]) {
         return serial(async (tx) => {
             const layout = await tx.layoutVersion.findUnique({ where: { id: path[1] } });
             check(layout, '布局不存在', 404);
-            check(!await tx.session.count({ where: { layoutId: layout.id } }), '该布局已关联预约时段，不能删除');
-            check(!await tx.reservation.count({ where: { seat: { layoutId: layout.id } } }), '该布局有预约历史，不能删除');
+            const linkedSessions = await tx.session.findMany({
+                where: { layoutId: layout.id },
+                select: { id: true, open: true, cancelledAt: true, icilOnly: true },
+            });
+            const ordinarySessions = linkedSessions.filter(session => !session.icilOnly);
+            check(ordinarySessions.every(session => !session.open || session.cancelledAt), '请先暂停或取消所有关联时段，再删除布局', 409);
+            const sessionIds = linkedSessions.map(session => session.id);
+            const activeMemberReservations = await tx.reservation.count({ where: { OR: [{ sessionId: { in: sessionIds } }, { seat: { layoutId: layout.id } }], cancelledAt: null, user: { role: 'USER' } } });
+            check(activeMemberReservations === 0, '该布局仍有学员有效预约，不能删除', 409);
+            const activeExternalAdminReservations = await tx.reservation.count({ where: { sessionId: { notIn: sessionIds }, seat: { layoutId: layout.id }, cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } } } });
+            check(activeExternalAdminReservations === 0, '该布局座位仍被其他时段的管理员预约使用，不能删除', 409);
+            const activeReservations = await tx.reservation.count({ where: { OR: [{ sessionId: { in: sessionIds } }, { seat: { layoutId: layout.id } }], cancelledAt: null } });
+            const historicalReservations = await tx.reservation.count({ where: { OR: [{ sessionId: { in: sessionIds } }, { seat: { layoutId: layout.id } }] } });
+            await tx.reservation.deleteMany({ where: { OR: [{ sessionId: { in: sessionIds } }, { seat: { layoutId: layout.id } }] } });
+            await tx.assistantCoverage.deleteMany({ where: { sessionId: { in: sessionIds } } });
+            await tx.bookingBlock.deleteMany({ where: { sessionId: { in: sessionIds } } });
+            await tx.session.deleteMany({ where: { id: { in: sessionIds } } });
             await tx.layoutVersion.delete({ where: { id: layout.id } });
-            await audit(tx, user.id, 'LAYOUT_DELETE', layout.id, { name: layout.name });
+            await audit(tx, user.id, 'LAYOUT_DELETE', layout.id, { name: layout.name, deletedSessions: linkedSessions.length, removedActiveReservations: activeReservations, removedHistoricalReservations: historicalReservations });
             return { ok: true };
         });
     }
@@ -492,8 +720,10 @@ async function dispatch(req: NextRequest, path: string[]) {
             const layout = await tx.layoutVersion.findUnique({ where: { id: path[1] }, include: { seats: true } });
             check(layout?.status === 'DRAFT' && layout.seats.some(s => s.enabled), '请先保存至少一个可用座位');
             const futureSessions = await tx.session.findMany({
-                where: { layout: { venueId: layout.venueId }, layoutId: { not: layout.id }, startsAt: { gt: new Date() } },
-                include: { reservations: { include: { seat: { select: { code: true } } } } }
+                where: { layout: { venueId: layout.venueId }, layoutId: { not: layout.id }, startsAt: { gt: new Date() }, cancelledAt: null, icilOnly: false, reservations: { none: { cancelledAt: null } } },
+                orderBy: { startsAt: 'asc' },
+                take: 1,
+                include: { reservations: { where: { cancelledAt: null }, include: { seat: { select: { code: true } } } } }
             });
             const seatsByCode = new Map(layout.seats.map(seat => [seat.code, seat]));
             for (const session of futureSessions) {
@@ -514,8 +744,13 @@ async function dispatch(req: NextRequest, path: string[]) {
         const data = courseSchema.parse(await body(req));
         return serial(async (tx) => { const course = path[2] ? await tx.course.update({ where: { id: path[2] }, data }) : await tx.course.create({ data }); await audit(tx, user.id, 'COURSE_SAVE', course.id, data); return { course }; });
     }
-    if (key === 'admin/sessions' && method === 'GET')
-        return { sessions: (await db.session.findMany({ include: sessionInclude, orderBy: { startsAt: 'desc' }, take: 500 })).map(s => ({ ...s, adminReady: s.open })) };
+    if (key === 'admin/sessions' && method === 'GET') {
+        const [sessions, blocks] = await Promise.all([
+            db.session.findMany({ where: { icilOnly: false }, include: sessionInclude, orderBy: { startsAt: 'desc' }, take: 500 }),
+            db.bookingBlock.findMany({ where: { active: true }, orderBy: { startsAt: 'asc' } }),
+        ]);
+        return { sessions: sessions.map(s => { const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt); return { ...s, adminReady: s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY') }; }) };
+    }
     if ((key === 'sessions' && method === 'POST') || (path[0] === 'sessions' && path.length === 2 && method === 'PUT')) {
         const data = sessionSchema.parse(await body(req));
         return serial(async (tx) => {
@@ -530,6 +765,7 @@ async function dispatch(req: NextRequest, path: string[]) {
                 await tx.$queryRaw `SELECT id FROM "Session" WHERE id = ${path[1]} FOR UPDATE`;
                 const existing = await tx.session.findUnique({ where: { id: path[1] }, include: { _count: { select: { reservations: true, coverage: true } } } });
                 check(existing, '场次不存在', 404);
+                check(!existing.icilOnly, '不能编辑ICIL全天预约容器', 409);
                 check(!existing.cancelledAt, '已取消时段不可修改');
                 check(existing.startsAt > new Date(), '已开始场次不可修改');
                 if (existing._count.reservations || existing._count.coverage)
@@ -539,7 +775,7 @@ async function dispatch(req: NextRequest, path: string[]) {
             }
             // One venue cannot host overlapping open sessions. Serializable predicate checks prevent races.
             if (data.open)
-                check(!await tx.session.findFirst({ where: { id: { not: path[1] ?? '' }, open: true, layout: { venueId: layout.venueId }, startsAt: { lt: new Date(data.endsAt) }, endsAt: { gt: new Date(data.startsAt) } } }), '此场地在该时段已有开放场次', 409);
+                check(!await tx.session.findFirst({ where: { id: { not: path[1] ?? '' }, open: true, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: new Date(data.endsAt) }, endsAt: { gt: new Date(data.startsAt) } } }), '此场地在该时段已有开放场次', 409);
             const course = data.courseId ? await tx.course.findUnique({ where: { id: data.courseId } }) : await tx.course.findFirst({ orderBy: { id: 'asc' } });
             check(course, '系统尚未初始化自习室配置', 503);
             const values = { courseId: course.id, layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open && !!path[1], startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
@@ -553,7 +789,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         const reservations = await db.reservation.findMany({ where: { sessionId }, include: recordInclude, orderBy: { createdAt: 'desc' }, take: req.nextUrl.searchParams.get('export') === 'csv' ? undefined : 5000 });
         if (req.nextUrl.searchParams.get('export') === 'csv') {
             const safe = (value: string) => '"' + (/^[=+\-@\t\r]/.test(value) ? "'" : '') + value.replaceAll('"', '""') + '"';
-            const csv = [['姓名', '学号', '开始时间（上海）', '座位', '状态'], ...reservations.map(r => [r.user.name, r.user.studentId, r.session.startsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }), r.seat.code, r.cancelledAt ? '已取消' : '已预约'])].map(row => row.map(safe).join(',')).join('\r\n');
+            const csv = [['姓名', '学号', '开始时间（上海）', '结束时间（上海）', '座位', '状态'], ...reservations.map(r => [r.user.name, r.user.studentId, r.startsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }), r.endsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }), r.seat.code, r.cancelledAt ? '已取消' : '已预约'])].map(row => row.map(safe).join(',')).join('\r\n');
             return new NextResponse('\uFEFF' + csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="reservations.csv"', 'Cache-Control': 'no-store' } });
         }
         return { reservations, coverage: await db.assistantCoverage.findMany({ where: { sessionId }, include: { assistant: { select: { name: true, email: true } }, session: { include: { course: true } } }, orderBy: { createdAt: 'desc' }, take: 5000 }) };
