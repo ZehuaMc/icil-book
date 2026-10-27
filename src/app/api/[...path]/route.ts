@@ -4,7 +4,7 @@ import { cookies } from 'next/headers';
 import { compare, hash } from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { z, ZodError } from 'zod';
-import { db, serial } from '@/lib/db';
+import { db, serial, lockInvariant } from '@/lib/db';
 import { currentUser, requireUser, createLogin, publicUser, hashToken, isOperator } from '@/lib/auth';
 import { check, HttpError } from '@/lib/errors';
 import { assertSameOrigin, readJson as body } from '@/lib/request';
@@ -203,10 +203,7 @@ async function dispatch(req: NextRequest, path: string[]) {
                         user = await db.user.update({ where: { id: existingLearner.id }, data: { name: input.name, enabled: true, deletedAt: null, groupId: settings.defaultGroupId, passwordHash: await hash(input.password!, 12) }, select: publicUser });
                     }
                     else {
-                        const migratedAccount = existingLearner.email === `${input.studentId}+user@student.local`
-                            && !!(await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: 'ADMIN' } }, select: { id: true } }));
-                        check(migratedAccount, '该学号已注册学员账号，请直接登录', 409);
-                        user = await db.user.update({ where: { id: existingLearner.id }, data: { name: input.name, passwordHash: await hash(input.password!, 12) }, select: publicUser });
+                        check(false, '该学号已注册学员账号，请直接登录', 409);
                     }
                 }
                 else {
@@ -334,9 +331,10 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (path[0] === 'reservations' && path.length === 3 && path[2] === 'check-in' && method === 'POST')
         return { reservation: await checkInReservation(user.id, path[1]) };
     if (key === 'reservations/coverage' && method === 'POST') {
-        const data = z.object({ sessionId: id.optional(), layoutId: id.optional(), startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }) }).refine(v => v.sessionId || v.layoutId, '请选择布局').parse(await body(req));
+        const data = z.object({ sessionId: id.optional(), layoutId: id.optional(), startsAt: z.string().datetime({ offset: true }).optional(), endsAt: z.string().datetime({ offset: true }).optional() }).refine(v => v.sessionId || v.layoutId, '请选择布局').refine(v => (!!v.startsAt === !!v.endsAt), '预约时间必须同时填写开始和结束时间').parse(await body(req));
         if (data.sessionId)
             return { coverage: await addCoverage(user.id, data.sessionId, data.startsAt, data.endsAt) };
+        check(data.startsAt && data.endsAt, '请选择有效的开始和结束时间');
         return await createAssistantSession(user.id, data.layoutId!, data.startsAt, data.endsAt);
     }
     if (path[0] === 'reservations' && path[1] === 'coverage' && path.length === 3 && method === 'DELETE')
@@ -476,11 +474,13 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (path[0] === 'admin' && path[1] === 'users' && path.length === 3 && method === 'PATCH') {
         const data = z.object({ name: z.string().trim().min(1).max(60), role: z.enum(['ADMIN', 'USER']), memberType: z.enum(['YSYX', 'ICIL']).default('YSYX'), enabled: z.boolean(), groupId: id }).parse(await body(req));
         return serial(async (tx) => {
+            await lockInvariant(tx, 'admin-role-protection');
+            await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${path[2]} FOR UPDATE`;
             const target = await tx.user.findUnique({ where: { id: path[2] } });
             check(target, '用户不存在', 404);
             check(!target.deletedAt, '已注销账号不能再编辑', 409);
-            if (isOperator(target) && (!data.enabled || data.role !== 'ADMIN'))
-                check(await tx.user.count({ where: { role: { in: ['ADMIN', 'ASSISTANT'] }, enabled: true, deletedAt: null } }) > 1, '必须保留至少一名启用的管理员');
+            if (target.role === 'ADMIN' && (!data.enabled || data.role !== 'ADMIN'))
+                check(await tx.user.count({ where: { role: 'ADMIN', enabled: true, deletedAt: null } }) > 1, '必须保留至少一名启用的管理员');
             const result = await tx.user.update({ where: { id: target.id }, data: { ...data, memberType: data.role === 'USER' ? data.memberType : 'YSYX' }, select: publicUser });
             const downgradedFromIcil = target.role === 'USER' && target.memberType === 'ICIL' && data.role === 'USER' && data.memberType === 'YSYX';
             let cancelledIcilReservations = 0;
@@ -512,6 +512,8 @@ async function dispatch(req: NextRequest, path: string[]) {
                     cancelledIcilReservations = cancelled.length;
                 }
             }
+            if (target.role !== 'USER' && (data.role === 'USER' || !data.enabled))
+                await tx.assistantCoverage.deleteMany({ where: { assistantId: target.id } });
             if (!data.enabled)
                 await tx.authSession.deleteMany({ where: { userId: target.id } });
             await audit(tx, user.id, 'USER_UPDATE', target.id, { ...data, cancelledIcilReservations });
@@ -521,11 +523,13 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (path[0] === 'admin' && path[1] === 'users' && path.length === 3 && method === 'DELETE') {
         check(path[2] !== user.id, '不能注销当前登录的管理员账号', 409);
         return serial(async (tx) => {
+            await lockInvariant(tx, 'admin-role-protection');
+            await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${path[2]} FOR UPDATE`;
             const target = await tx.user.findUnique({ where: { id: path[2] } });
             check(target, '用户不存在', 404);
             check(!target.deletedAt, '该账号已经注销', 409);
-            if (isOperator(target) && target.enabled)
-                check(await tx.user.count({ where: { role: { in: ['ADMIN', 'ASSISTANT'] }, enabled: true, deletedAt: null } }) > 1, '必须保留至少一名启用的管理员');
+            if (target.role === 'ADMIN' && target.enabled)
+                check(await tx.user.count({ where: { role: 'ADMIN', enabled: true, deletedAt: null } }) > 1, '必须保留至少一名启用的管理员');
 
             const now = new Date();
             const futureAdminBookings = isOperator(target) ? await tx.reservation.findMany({
@@ -699,6 +703,7 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (path[0] === 'layouts' && path.length === 2 && method === 'PUT') {
         const data = layoutSchema.parse(await body(req));
         return serial(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM "LayoutVersion" WHERE id = ${path[1]} FOR UPDATE`;
             const layout = await tx.layoutVersion.findUnique({ where: { id: path[1] } });
             check(layout?.status === 'DRAFT', '已发布布局不可修改，请复制为新版本', 409);
             const currentSeats = await tx.seat.findMany({ where: { layoutId: layout.id }, select: { id: true } });
@@ -717,10 +722,11 @@ async function dispatch(req: NextRequest, path: string[]) {
     }
     if (path[0] === 'layouts' && path[2] === 'publish' && path.length === 3 && method === 'POST')
         return serial(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM "LayoutVersion" WHERE id = ${path[1]} FOR UPDATE`;
             const layout = await tx.layoutVersion.findUnique({ where: { id: path[1] }, include: { seats: true } });
             check(layout?.status === 'DRAFT' && layout.seats.some(s => s.enabled), '请先保存至少一个可用座位');
             const futureSessions = await tx.session.findMany({
-                where: { layout: { venueId: layout.venueId }, layoutId: { not: layout.id }, startsAt: { gt: new Date() }, cancelledAt: null, icilOnly: false, reservations: { none: { cancelledAt: null } } },
+                where: { layout: { venueId: layout.venueId }, layoutId: layout.sourceLayoutId ?? '__no_source__', startsAt: { gt: new Date() }, cancelledAt: null, icilOnly: false, reservations: { none: { cancelledAt: null } } },
                 orderBy: { startsAt: 'asc' },
                 take: 1,
                 include: { reservations: { where: { cancelledAt: null }, include: { seat: { select: { code: true } } } } }
@@ -754,9 +760,11 @@ async function dispatch(req: NextRequest, path: string[]) {
     if ((key === 'sessions' && method === 'POST') || (path[0] === 'sessions' && path.length === 2 && method === 'PUT')) {
         const data = sessionSchema.parse(await body(req));
         return serial(async (tx) => {
+            await tx.$queryRaw`SELECT id FROM "LayoutVersion" WHERE id = ${data.layoutId} FOR UPDATE`;
             check(Date.parse(data.startsAt) > Date.now(), '场次必须在未来开始');
             const layout = await tx.layoutVersion.findUnique({ where: { id: data.layoutId } });
             check(layout?.status === 'PUBLISHED', '请选择已发布的布局');
+            await lockInvariant(tx, `session-overlap:${layout.venueId}`);
             if (!path[1]) {
                 const latestLayout = await tx.layoutVersion.findFirst({ where: { venueId: layout.venueId, status: 'PUBLISHED' }, orderBy: { publishedAt: 'desc' } });
                 check(latestLayout?.id === layout.id, '新时段必须使用该场地最新发布的布局');
@@ -768,8 +776,10 @@ async function dispatch(req: NextRequest, path: string[]) {
                 check(!existing.icilOnly, '不能编辑ICIL全天预约容器', 409);
                 check(!existing.cancelledAt, '已取消时段不可修改');
                 check(existing.startsAt > new Date(), '已开始场次不可修改');
-                if (existing._count.reservations || existing._count.coverage)
+                if (existing._count.reservations || existing._count.coverage) {
+                    check(!data.courseId || existing.courseId === data.courseId, '已有预约，不能修改课程');
                     check(existing.layoutId === data.layoutId && existing.startsAt.getTime() === Date.parse(data.startsAt) && existing.endsAt.getTime() === Date.parse(data.endsAt), '已有预约，不能修改时间或布局');
+                }
                 if (await tx.reservation.count({ where: { sessionId: existing.id, cancelledAt: null } }))
                     check(data.requiredAssistants <= existing._count.coverage, '助教要求不能超过现有保障人数');
             }
@@ -778,7 +788,7 @@ async function dispatch(req: NextRequest, path: string[]) {
                 check(!await tx.session.findFirst({ where: { id: { not: path[1] ?? '' }, open: true, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: new Date(data.endsAt) }, endsAt: { gt: new Date(data.startsAt) } } }), '此场地在该时段已有开放场次', 409);
             const course = data.courseId ? await tx.course.findUnique({ where: { id: data.courseId } }) : await tx.course.findFirst({ orderBy: { id: 'asc' } });
             check(course, '系统尚未初始化自习室配置', 503);
-            const values = { courseId: course.id, layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open && !!path[1], startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
+            const values = { courseId: course.id, layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open, startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
             const session = path[1] ? await tx.session.update({ where: { id: path[1] }, data: values }) : await tx.session.create({ data: values });
             await audit(tx, user.id, 'SESSION_SAVE', session.id, data);
             return { session };

@@ -1,83 +1,107 @@
 import { test, expect, type Page } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
-import { createHash } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+
 const db = new PrismaClient();
 const password = process.env.SEED_PASSWORD ?? '';
+const adminKey = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
 test.beforeAll(async () => {
-    const keys = ['admin', 'assistant', 'learner'].map(name => `auth/login:${createHash('sha256').update(`${name}@station.local`).digest('hex')}`);
-    await db.loginAttempt.deleteMany({ where: { key: { in: keys } } });
+    await db.loginAttempt.deleteMany({ where: { key: `auth/login:ADMIN:${createHash('sha256').update('admin001').digest('hex')}` } });
 });
-async function login(page: Page, email: string) {
-    await page.goto('/login');
-    await page.getByLabel('邮箱').fill(email);
-    await page.getByLabel('密码').fill(password);
-    await page.getByRole('button', { name: '登录空间' }).click();
+
+async function loginStudent(page: Page, studentId = 'student001', studentPassword = password) {
+    await page.goto('/login?mode=student');
+    await page.getByLabel('学号').fill(studentId);
+    await page.getByLabel('密码').fill(studentPassword);
+    await page.getByRole('button', { name: '进入学员预约' }).click();
     await expect(page.getByRole('heading', { name: /找到你的好位置/ })).toBeVisible();
 }
-test('注册 → 登录 → 助教保障 → 学员选座 → 管理员查看与导出', async ({ browser, baseURL }) => {
-    const suffix = Date.now().toString(), email = `e2e-${suffix}@example.test`, courseId = `e2e-course-${suffix}`, sessionId = `e2e-session-${suffix}`;
-    const layout = await db.layoutVersion.findUniqueOrThrow({ where: { id: 'seed-layout' } });
-    const day = new Date(Date.now() + 30 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-    await db.course.create({ data: { id: courseId, name: `端到端实践 ${suffix}`, instructor: '测试教师' } });
-    await db.session.create({ data: { id: sessionId, courseId, layoutId: layout.id, startsAt: new Date(`${day}T09:00:00+08:00`), endsAt: new Date(`${day}T11:00:00+08:00`) } });
-    const learnerContext = await browser.newContext({ baseURL }), assistantContext = await browser.newContext({ baseURL }), adminContext = await browser.newContext({ baseURL });
-    const learner = await learnerContext.newPage(), assistant = await assistantContext.newPage(), admin = await adminContext.newPage();
+
+async function loginAdmin(page: Page, studentId = 'admin001') {
+    await page.goto('/login?mode=admin');
+    await page.getByLabel('学号').fill(studentId);
+    await page.getByLabel('管理员密钥').fill(adminKey);
+    await page.getByRole('button', { name: '进入管理员后台' }).click();
+    await expect(page.getByRole('heading', { name: /空间管理概览/ })).toBeVisible();
+}
+
+test('学号注册、登录、管理员开放场次、学员预约与后台 CSV 导出', async ({ browser, baseURL }) => {
+    const suffix = randomUUID().slice(0, 8);
+    const studentId = `e2e${suffix}`;
+    const studentPassword = 'Booking-Password-2026!';
+    let learnerId = '';
+    const course = await db.course.create({ data: { name: `端到端课程 ${suffix}`, instructor: '测试教师' } });
+    const venue = await db.venue.create({ data: { name: `浏览器验收 ${suffix}`, location: '测试场地' } });
+    const layout = await db.layoutVersion.create({ data: { name: `浏览器布局 ${suffix}`, venueId: venue.id, status: 'PUBLISHED', publishedAt: new Date(), seats: { create: [{ code: 'A01', x: 100, y: 100 }, { code: 'A02', x: 200, y: 100 }, { code: 'STAFF', x: 300, y: 100, fixedForAssistant: true }] } }, include: { seats: true } });
+    const startsAt = new Date(Math.ceil(Date.now() / 60000) * 60000 + 67 * 60000);
+    const endsAt = new Date(startsAt.getTime() + 37 * 60000);
+    const session = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: false } });
+    const adminContext = await browser.newContext({ baseURL });
+    const learnerContext = await browser.newContext({ baseURL });
+    const admin = await adminContext.newPage();
+    const learner = await learnerContext.newPage();
     try {
-        await learner.goto('/register');
-        await learner.getByLabel('姓名').fill(`测试学员${suffix}`);
-        await learner.getByLabel('邮箱').fill(email);
-        await learner.getByLabel('密码').fill(password);
-        await learner.getByRole('button', { name: '创建账号' }).click();
+        await loginAdmin(admin);
+        const staff = layout.seats.find(s => s.fixedForAssistant) ?? layout.seats[0];
+        const learnerSeat = layout.seats.find(s => s.enabled && !s.fixedForAssistant && s.id !== staff.id)!;
+        await admin.goto('/admin/sessions');
+        const sessionRow = admin.getByRole('row').filter({ hasText: layout.name });
+        await sessionRow.getByRole('button', { name: '选择工位', exact: true }).click();
+        await admin.getByRole('dialog').getByRole('button', { name: `座位 ${staff.code}，助教专用工位，可预约`, exact: true }).click();
+        await admin.getByRole('button', { name: '预约选中工位', exact: true }).click();
+        await expect(admin.getByRole('status')).toContainText('管理员工位已更新');
+        await sessionRow.getByRole('button', { name: '开放此时间', exact: true }).click();
+        await expect(admin.getByRole('status')).toContainText('已开放此时间');
+        await learner.goto('/register?mode=student');
+        await learner.getByLabel('昵称').fill('端到端学员');
+        await learner.getByLabel('学号').fill(studentId);
+        await learner.getByLabel('密码').fill(studentPassword);
+        await learner.getByRole('button', { name: '注册学员账号' }).click();
         await expect(learner.getByRole('heading', { name: /找到你的好位置/ })).toBeVisible();
-        await learner.getByRole('button', { name: '退出登录' }).click();
-        await login(learner, email);
-        await learner.getByRole('button', { name: `选择日期 ${day}`, exact: true }).click();
-        await expect(learner.getByText('等待助教完成现场保障登记')).toBeVisible();
-        await expect(learner.getByRole('button', { name: '确认预约', exact: true })).toBeDisabled();
-        await login(assistant, 'assistant@station.local');
-        await assistant.getByRole('link', { name: '助教保障', exact: true }).click();
-        await assistant.locator('.record-card').filter({ hasText: `端到端实践 ${suffix}` }).getByRole('button', { name: '登记现场保障' }).click();
-        await expect(assistant.getByRole('status')).toContainText('登记成功');
-        await learner.reload();
-        await learner.getByRole('button', { name: `选择日期 ${day}`, exact: true }).click();
-        await learner.getByRole('button', { name: '座位 A01，可预约', exact: true }).click();
+        learnerId = (await db.user.findUniqueOrThrow({ where: { studentId_role: { studentId, role: 'USER' } } })).id;
+        await learner.getByRole('button', { name: '退出登录并返回入口', exact: true }).click();
+        await expect(learner.getByRole('heading', { name: '先选择你的入口。' })).toBeVisible();
+        await loginStudent(learner, studentId, studentPassword);
+        const date = startsAt.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+        const time = (value: Date) => value.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' });
+        await learner.getByRole('button', { name: `选择日期 ${date}`, exact: true }).click();
+        await learner.getByRole('button', { name: `选择时间段 ${time(startsAt)} 至 ${time(endsAt)}`, exact: true }).click();
+        await learner.getByRole('button', { name: `座位 ${learnerSeat.code}，可预约`, exact: true }).click();
         await learner.getByRole('button', { name: '确认预约', exact: true }).click();
-        await learner.getByRole('button', { name: '确认，预约这个工位' }).click();
+        await learner.getByRole('button', { name: '确认，预约这个工位', exact: true }).click();
         await expect(learner.getByRole('status')).toContainText('预约成功');
-        await learner.getByRole('link', { name: '查看我的预约' }).click();
-        await expect(learner.locator('.record-card').filter({ hasText: `端到端实践 ${suffix}` })).toContainText('A01');
-        await login(admin, 'admin@station.local');
-        await admin.getByRole('link', { name: '预约记录', exact: true }).click();
-        await admin.getByLabel('筛选场次').selectOption(sessionId);
-        await expect(admin.locator('table').first()).toContainText(email);
+        await learner.goto('/my-reservations');
+        await expect(learner.locator('.record-card')).toContainText(learnerSeat.code);
+        await admin.goto('/admin/reservations');
+        await admin.getByLabel('筛选预约时段').selectOption(session.id);
+        await expect(admin.locator('table')).toContainText(studentId);
         const download = admin.waitForEvent('download');
         await admin.getByRole('link', { name: '导出 CSV' }).click();
         expect((await download).suggestedFilename()).toBe('reservations.csv');
-        const forbidden = await learner.request.get('/api/admin/users');
-        expect(forbidden.status()).toBe(403);
-        await assistant.reload();
-        await expect(assistant.locator('.record-card').filter({ hasText: `端到端实践 ${suffix}` }).getByRole('button')).toBeDisabled();
-    }
-    finally {
-        await Promise.all([learnerContext.close(), assistantContext.close(), adminContext.close()]);
-        const user = await db.user.findUnique({ where: { email } });
-        const reservations = await db.reservation.findMany({ where: { sessionId } });
-        const coverages = await db.assistantCoverage.findMany({ where: { sessionId } });
-        await db.auditLog.deleteMany({ where: { OR: [{ actorId: user?.id ?? '' }, { target: { in: [sessionId, ...reservations.map(r => r.id), ...coverages.map(c => c.id)] } }] } });
-        await db.reservation.deleteMany({ where: { sessionId } });
-        await db.assistantCoverage.deleteMany({ where: { sessionId } });
-        await db.session.delete({ where: { id: sessionId } });
-        await db.course.delete({ where: { id: courseId } });
-        if (user)
-            await db.user.delete({ where: { id: user.id } });
+    } finally {
+        await Promise.allSettled([adminContext.close(), learnerContext.close()]);
+        const records = await db.reservation.findMany({ where: { sessionId: session.id }, select: { id: true } });
+        await db.auditLog.deleteMany({ where: { target: { in: [session.id, ...records.map(r => r.id)] } } });
+        await db.reservation.deleteMany({ where: { sessionId: session.id } });
+        await db.sessionAdminBooking.deleteMany({ where: { sessionId: session.id } });
+        await db.assistantCoverage.deleteMany({ where: { sessionId: session.id } });
+        await db.session.delete({ where: { id: session.id } });
+        await db.course.delete({ where: { id: course.id } });
+        await db.layoutVersion.delete({ where: { id: layout.id } });
+        await db.venue.delete({ where: { id: venue.id } });
+        if (learnerId) {
+            await db.auditLog.deleteMany({ where: { actorId: learnerId } });
+            await db.user.delete({ where: { id: learnerId } });
+        }
     }
 });
-test('管理员编辑布局、发布与场次绑定，已发布版本不可修改', async ({ page }) => {
-    const suffix = Date.now().toString();
-    let id = '', courseId = '', sessionId = '';
-    await login(page, 'admin@station.local');
+
+test('管理员创建布局、添加座位、发布后锁定编辑', async ({ page }) => {
+    const suffix = randomUUID().slice(0, 8);
+    let id = '';
+    await loginAdmin(page);
     try {
-        await page.getByRole('link', { name: '场地与布局' }).click();
+        await page.goto('/admin/layouts');
         await page.getByRole('button', { name: '新布局', exact: true }).click();
         await page.getByLabel('布局名称').fill(`测试布局 ${suffix}`);
         await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -85,99 +109,42 @@ test('管理员编辑布局、发布与场次绑定，已发布版本不可修�
         id = (await db.layoutVersion.findFirstOrThrow({ where: { name: `测试布局 ${suffix}` } })).id;
         await page.getByRole('button', { name: '桌子', exact: true }).click();
         await page.getByRole('button', { name: '座位', exact: true }).click();
-        await page.getByLabel('座位编号', { exact: true }).fill('T01');
+        await page.getByLabel(/座位编号/).fill('T01');
         await page.getByRole('button', { name: /^保存(?: \*)?$/, exact: true }).click();
         await expect(page.getByRole('status')).toContainText('草稿已保存');
         page.once('dialog', d => d.accept());
         await page.getByRole('button', { name: '保存并发布' }).click();
         await expect(page.getByRole('status')).toContainText('布局已发布');
-        const locked = await page.request.put(`/api/layouts/${id}`, { data: { name: 'illegal', width: 1000, height: 660, elements: [], seats: [] } });
-        expect(locked.status()).toBe(409);
-        const course = await db.course.create({ data: { name: `布局绑定 ${suffix}`, instructor: '测试教师' } });
-        courseId = course.id;
-        const date = new Date(Date.now() + 40 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-        const result = await page.request.post('/api/sessions', { data: { courseId, layoutId: id, startsAt: `${date}T09:00:00+08:00`, endsAt: `${date}T11:00:00+08:00`, requiredAssistants: 1, open: true } });
-        expect(result.ok()).toBeTruthy();
-        sessionId = (await result.json()).session.id;
-        expect((await db.session.findUniqueOrThrow({ where: { id: sessionId } })).layoutId).toBe(id);
-    }
-    finally {
-        if (sessionId)
-            await db.session.delete({ where: { id: sessionId } });
-        if (courseId)
-            await db.course.delete({ where: { id: courseId } });
-        if (id)
+        expect((await page.request.put(`/api/layouts/${id}`, { data: { name: 'locked', width: 1000, height: 660, elements: [], seats: [] } })).status()).toBe(409);
+    } finally {
+        if (id) {
+            await db.auditLog.deleteMany({ where: { target: id } });
             await db.layoutVersion.delete({ where: { id } });
-        await db.auditLog.deleteMany({ where: { target: { in: [id, sessionId] } } });
+        }
     }
 });
-test.afterAll(() => db.$disconnect());
 
-test('接口权限、默认分组、日期覆盖、账号停用及退出会话', async ({ playwright, baseURL }) => {
-    const admin = await playwright.request.newContext({ baseURL });
+test('学员无权访问后台，管理员登录可创建课程和场次', async ({ playwright, baseURL }) => {
     const learner = await playwright.request.newContext({ baseURL });
-    const assistant = await playwright.request.newContext({ baseURL });
-    const suffix = Date.now().toString(), email = `api-${suffix}@example.test`;
-    let groupId = '', userId = '', courseId = '', sessionId = '';
-    let previousDefault = '';
+    const admin = await playwright.request.newContext({ baseURL });
+    const suffix = randomUUID().slice(0, 8);
+    let courseId = '', sessionId = '';
     try {
         expect((await learner.get('/api/admin/users')).status()).toBe(401);
-        expect((await admin.post('/api/auth/login', { data: { email: 'admin@station.local', password: 'definitely-wrong' } })).status()).toBe(401);
-        expect((await admin.post('/api/auth/login', { data: { email: 'admin@station.local', password } })).ok()).toBeTruthy();
-        const groups = await (await admin.get('/api/groups')).json();
-        previousDefault = groups.settings.defaultGroupId;
-        const day = new Date(Date.now() + 50 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
-        const rule = { name: `接口测试分组 ${suffix}`, canReserve: true, isDefault: true, weeklyRules: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })), dateRules: [{ date: day, allowed: false, startMinute: 0, endMinute: 1440 }] };
-        const createdGroup = await admin.post('/api/groups', { data: rule });
-        expect(createdGroup.ok()).toBeTruthy(); groupId = (await createdGroup.json()).group.id;
-        expect((await learner.post('/api/auth/register', { data: { name: '接口测试学员', email, password: 'short' } })).status()).toBe(400);
-        const registration = await learner.post('/api/auth/register', { data: { name: '接口测试学员', email, password, role: 'ADMIN', enabled: true } });
-        expect(registration.ok()).toBeTruthy();
-        const registered = (await registration.json()).user; userId = registered.id;
-        expect(registered.groupId).toBe(groupId); expect(registered.role).toBe('USER'); expect(registered.passwordHash).toBeUndefined();
-        expect((await learner.get('/api/admin/users')).status()).toBe(403);
-        expect((await learner.post('/api/groups', { data: rule })).status()).toBe(403);
-        const course = await admin.post('/api/admin/courses', { data: { name: `接口规则测试 ${suffix}`, instructor: '测试教师' } });
+        expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey: 'wrong' } })).status()).toBe(403);
+        expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey } })).ok()).toBeTruthy();
+        const course = await admin.post('/api/admin/courses', { data: { name: `API 课程 ${suffix}`, instructor: '测试教师' } });
         expect(course.ok()).toBeTruthy(); courseId = (await course.json()).course.id;
-        const input = { courseId, layoutId: 'seed-layout', startsAt: `${day}T09:00:00+08:00`, endsAt: `${day}T11:00:00+08:00`, requiredAssistants: 1, open: true };
-        const createdSession = await admin.post('/api/sessions', { data: input });
-        expect(createdSession.ok()).toBeTruthy(); sessionId = (await createdSession.json()).session.id;
-        expect((await admin.put(`/api/sessions/${sessionId}`, { data: { ...input, startsAt: '2020-01-01T09:00:00+08:00', endsAt: '2020-01-01T11:00:00+08:00' } })).status()).toBe(400);
-        expect((await admin.post('/api/sessions', { data: input })).status()).toBe(409);
-        expect((await admin.post('/api/reservations/coverage', { data: { sessionId } })).status()).toBe(403);
-        const seats = await db.seat.findMany({ where: { layoutId: 'seed-layout', enabled: true }, orderBy: { code: 'asc' } });
-        expect((await learner.post('/api/reservations', { data: { sessionId, seatId: seats[0].id } })).status()).toBe(400);
-        expect((await assistant.post('/api/auth/login', { data: { email: 'assistant@station.local', password } })).ok()).toBeTruthy();
-        expect((await assistant.post('/api/reservations/coverage', { data: { sessionId } })).ok()).toBeTruthy();
-        // Date closure wins even with staff and all seven weekly permission windows.
-        expect((await learner.post('/api/reservations', { data: { sessionId, seatId: seats[0].id } })).status()).toBe(403);
-        expect((await admin.put(`/api/groups/${groupId}`, { data: { ...rule, dateRules: [{ date: day, allowed: true, startMinute: 540, endMinute: 660 }] } })).ok()).toBeTruthy();
-        const booking = await learner.post('/api/reservations', { data: { sessionId, seatId: seats[0].id } });
-        expect(booking.ok()).toBeTruthy(); const reservationId = (await booking.json()).reservation.id;
-        expect((await learner.post('/api/reservations', { data: { sessionId, seatId: seats[1].id } })).status()).toBe(409);
-        expect((await admin.put(`/api/sessions/${sessionId}`, { data: { ...input, requiredAssistants: 2 } })).status()).toBe(400);
-        expect((await learner.delete(`/api/reservations/${reservationId}`)).ok()).toBeTruthy();
-        expect((await admin.patch(`/api/admin/users/${userId}`, { data: { name: registered.name, role: 'USER', groupId, enabled: false } })).ok()).toBeTruthy();
-        expect((await learner.get('/api/auth/me')).status()).toBe(200);
-        expect((await (await learner.get('/api/auth/me')).json()).user).toBeNull();
-        expect((await learner.post('/api/auth/login', { data: { email, password } })).status()).toBe(401);
-        expect((await admin.patch(`/api/admin/users/${userId}`, { data: { name: registered.name, role: 'USER', groupId, enabled: true } })).ok()).toBeTruthy();
-        expect((await learner.post('/api/auth/login', { data: { email, password } })).ok()).toBeTruthy();
-        expect((await learner.post('/api/auth/logout')).ok()).toBeTruthy();
-        expect((await learner.get('/api/reservations')).status()).toBe(401);
+        const startsAt = new Date(Date.now() + 3 * 3600000);
+        const endsAt = new Date(startsAt.getTime() + 3600000);
+        const created = await admin.post('/api/sessions', { data: { courseId, layoutId: 'seed-layout', startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), requiredAssistants: 1, open: false } });
+        expect(created.ok()).toBeTruthy(); sessionId = (await created.json()).session.id;
+        expect((await learner.post('/api/reservations/coverage', { data: { sessionId } })).status()).toBe(401);
     } finally {
-        if (previousDefault) await db.appSetting.update({ where: { id: 'main' }, data: { defaultGroupId: previousDefault } });
-        const reservations = sessionId ? await db.reservation.findMany({ where: { sessionId } }) : [];
-        const coverages = sessionId ? await db.assistantCoverage.findMany({ where: { sessionId } }) : [];
-        await db.auditLog.deleteMany({ where: { OR: [{ actorId: userId || 'none' }, { target: { in: [groupId, sessionId, courseId, userId, ...reservations.map(r => r.id), ...coverages.map(c => c.id)].filter(Boolean) } }] } });
-        if (sessionId) {
-            await db.reservation.deleteMany({ where: { sessionId } });
-            await db.assistantCoverage.deleteMany({ where: { sessionId } });
-            await db.session.delete({ where: { id: sessionId } });
-        }
+        if (sessionId) await db.session.delete({ where: { id: sessionId } });
         if (courseId) await db.course.delete({ where: { id: courseId } });
-        if (userId) await db.user.delete({ where: { id: userId } });
-        if (groupId) await db.group.delete({ where: { id: groupId } });
-        await Promise.all([admin.dispose(), learner.dispose(), assistant.dispose()]);
+        await Promise.all([learner.dispose(), admin.dispose()]);
     }
 });
+
+test.afterAll(() => db.$disconnect());

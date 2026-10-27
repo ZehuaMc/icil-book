@@ -1,4 +1,4 @@
-import { db, serial, type Tx } from './db';
+import { db, serial, lockInvariant, type Tx } from './db';
 import { check } from './errors';
 import { groupAllows, maxMemberBookingTime } from './rules';
 import { isOperator } from './auth';
@@ -14,6 +14,7 @@ export async function audit(tx: Tx, actorId: string, action: string, target: str
 }
 async function bookingContext(tx: Tx, actorId: string, sessionId: string) {
     // All seat, coverage, and session mutations take the same row lock.
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${actorId} FOR UPDATE`;
     await tx.$queryRaw `SELECT id FROM "Session" WHERE id = ${sessionId} FOR UPDATE`;
     const [user, session] = await Promise.all([
         tx.user.findUnique({ where: { id: actorId }, include: { group: { include: { weeklyRules: true, dateRules: true } } } }),
@@ -184,7 +185,7 @@ export async function replaceAdminSeat(actorId: string, sessionId: string, seatI
 export async function addCoverage(actorId: string, sessionId: string, requestedStartsAt?: string, requestedEndsAt?: string) {
     return serial(async (tx) => {
         const { user, session } = await bookingContext(tx, actorId, sessionId);
-        check(user.role === 'ASSISTANT', '仅助教可以登记现场保障', 403);
+        check(isOperator(user), '仅助教或管理员可以登记现场保障', 403);
         const startsAt = requestedStartsAt ? new Date(requestedStartsAt) : session.startsAt;
         const endsAt = requestedEndsAt ? new Date(requestedEndsAt) : session.endsAt;
         check(Number.isFinite(startsAt.getTime()) && Number.isFinite(endsAt.getTime()) && endsAt > startsAt, '请选择有效的开始和结束时间');
@@ -208,7 +209,7 @@ export async function addCoverage(actorId: string, sessionId: string, requestedS
 export async function createAssistantSession(actorId: string, layoutId: string, startsAtValue: string, endsAtValue: string) {
     return serial(async (tx) => {
         const user = await tx.user.findUnique({ where: { id: actorId } });
-        check(user?.enabled && user.role === 'ASSISTANT', '仅助教可以创建保障时段', 403);
+        check(user?.enabled && isOperator(user), '仅助教或管理员可以创建保障时段', 403);
         const startsAt = new Date(startsAtValue), endsAt = new Date(endsAtValue);
         check(Number.isFinite(startsAt.getTime()) && Number.isFinite(endsAt.getTime()) && endsAt > startsAt, '请选择有效的开始和结束时间');
         const now = new Date();
@@ -216,6 +217,7 @@ export async function createAssistantSession(actorId: string, layoutId: string, 
         check(endsAt.getTime() - startsAt.getTime() <= 86400000, '保障时段不能超过 24 小时');
         const layout = await tx.layoutVersion.findUnique({ where: { id: layoutId } });
         check(layout?.status === 'PUBLISHED', '请选择已发布的布局');
+        await lockInvariant(tx, `session-overlap:${layout.venueId}`);
         const course = await tx.course.findFirst({ orderBy: { name: 'asc' } });
         check(course, '系统尚未初始化自习室课程配置', 503);
         // Touching windows (2-6 then 6-9) are allowed; true overlaps merge into one wider window.
@@ -269,7 +271,10 @@ export async function removeCoverage(actorId: string, id: string) {
         const { user, session } = await bookingContext(tx, actorId, record.sessionId);
         check(user.role === 'ADMIN' || record.assistantId === actorId, '无权取消此保障预约', 403);
         check(session.startsAt > new Date(), '场次开始后无法取消');
-        check(!await tx.reservation.count({ where: { sessionId: session.id, cancelledAt: null } }), '已有学员预约，不能取消助教保障', 409);
+        // The administrator's own seat reservation is part of the coverage
+        // arrangement and may be removed together with it. Learner bookings
+        // are the records that make cancelling coverage unsafe.
+        check(!await tx.reservation.count({ where: { sessionId: session.id, cancelledAt: null, user: { role: 'USER' } } }), '已有学员预约，不能取消助教保障', 409);
         await tx.assistantCoverage.delete({ where: { id } });
         await audit(tx, actorId, 'COVERAGE_CANCEL', id, { sessionId: session.id });
         return { ok: true };

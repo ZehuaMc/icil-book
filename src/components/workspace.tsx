@@ -40,7 +40,7 @@ export default function Workspace() {
     } }, [notice]);
     const admin = path.startsWith('/admin');
     const navigation = isOperator(user) ? [] : [{ href: '/', icon: LayoutGrid, title: '预约工位' }, { href: '/my-reservations', icon: ClipboardList, title: '我的预约' }, { href: '/profile', icon: UserRound, title: '个人中心' }];
-    const adminNavigation = [{ href: '/admin', icon: LayoutGrid, title: '数据概览' }, { href: '/admin/users', icon: Users, title: '用户管理' }, { href: '/admin/groups', icon: ShieldCheck, title: '分组与权限' }, { href: '/admin/layouts', icon: PanelTop, title: '场地与布局' }, { href: '/admin/sessions', icon: Clock3, title: '预约时段' }, { href: '/admin/reservations', icon: ClipboardList, title: '预约记录' }, { href: '/admin/logs', icon: Settings2, title: '操作日志' }];
+    const adminNavigation = [{ href: '/admin', icon: LayoutGrid, title: '数据概览' }, { href: '/admin/users', icon: Users, title: '用户管理' }, { href: '/admin/groups', icon: ShieldCheck, title: '分组与权限' }, { href: '/admin/layouts', icon: PanelTop, title: '场地与布局' }, { href: '/admin/courses', icon: CalendarDays, title: '课程管理' }, { href: '/admin/sessions', icon: Clock3, title: '预约时段' }, { href: '/admin/reservations', icon: ClipboardList, title: '预约记录' }, { href: '/admin/logs', icon: Settings2, title: '操作日志' }];
     const title = [...navigation, ...adminNavigation].find(n => n.href === path)?.title ?? '自习室预约';
     return <div className="app-shell">
     <aside className="sidebar"><Link className="brand" href="/"><img className="workspace-logo-combined" src="/logo/icilxysyx.png" alt="ICIL × YSYX" /><div>工位预约<span>SPACE FOR LEARNING</span></div></Link>

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { Users, CalendarDays, Armchair, PanelTop, Plus, Download, ArrowUpRight, ShieldCheck, Check, Pencil, UserX, KeyRound } from 'lucide-react';
-import { api, subscribeToLayoutUpdates, type User, type Group, type Layout, type Session, type Reservation, type Coverage } from '@/lib/types';
+import { api, subscribeToLayoutUpdates, type User, type Group, type Layout, type Session, type Course, type Reservation, type Coverage } from '@/lib/types';
 import { formatDate, formatTime, localParts } from '@/lib/rules';
 import LayoutEditor from './layout-editor';
 import Modal from './modal';
@@ -10,7 +10,7 @@ import SeatMap from './seat-map';
 const titles: Record<string, [
     string,
     string
-]> = { '/admin': ['空间管理概览', '从一张工位，到一段专注时光。这里是空间运行的全貌。'], '/admin/users': ['用户管理', '连接每一位学习者，管理角色、分组与账号状态。'], '/admin/groups': ['分组与预约权限', '用清晰的时间规则，让空间有序共享。指定日期规则优先于每周规则。'], '/admin/layouts': ['场地与布局', '自由组合桌面与工位，打造适合学习的空间。'], '/admin/sessions': ['预约时段', '自由设置日期和分钟级时间，先选择管理员工位再开放给学员。'], '/admin/reservations': ['预约记录', '查看管理员和学员的座位预约，取消未开始的学员预约。'], '/admin/logs': ['操作日志', '记录每一次重要变更，让空间管理有迹可循。'] };
+]> = { '/admin': ['空间管理概览', '从一张工位，到一段专注时光。这里是空间运行的全貌。'], '/admin/users': ['用户管理', '连接每一位学习者，管理角色、分组与账号状态。'], '/admin/groups': ['分组与预约权限', '用清晰的时间规则，让空间有序共享。指定日期规则优先于每周规则。'], '/admin/layouts': ['场地与布局', '自由组合桌面与工位，打造适合学习的空间。'], '/admin/courses': ['课程管理', '让知识与实践，在这里发生。'], '/admin/sessions': ['预约时段', '自由设置日期和分钟级时间，先选择管理员工位再开放给学员。'], '/admin/reservations': ['预约记录', '查看管理员和学员的座位预约，取消未开始的学员预约。'], '/admin/logs': ['操作日志', '记录每一次重要变更，让空间管理有迹可循。'] };
 type Props = {
     notify: (s: string) => void;
 };
@@ -21,7 +21,7 @@ export default function Admin({ path, user, notify }: Props & {
     const info = titles[path];
     if (!info)
         return <p>页面不存在</p>;
-    return <><div className="page-heading"><div><div className="eyebrow">SPACE MANAGEMENT</div><h1>{info[0]}</h1><p>{info[1]}</p></div><span className="badge green"><ShieldCheck size={13}/>管理员工作台 · {user.name}</span></div>{path === '/admin' ? <Overview /> : path === '/admin/users' ? <UserAdmin notify={notify}/> : path === '/admin/groups' ? <GroupAdmin notify={notify}/> : path === '/admin/layouts' ? <LayoutEditor notify={notify}/> : path === '/admin/sessions' ? <SessionAdmin user={user} notify={notify}/> : path === '/admin/reservations' ? <ReservationAdmin notify={notify}/> : <Logs />}</>;
+    return <><div className="page-heading"><div><div className="eyebrow">SPACE MANAGEMENT</div><h1>{info[0]}</h1><p>{info[1]}</p></div><span className="badge green"><ShieldCheck size={13}/>管理员工作台 · {user.name}</span></div>{path === '/admin' ? <Overview /> : path === '/admin/users' ? <UserAdmin notify={notify}/> : path === '/admin/groups' ? <GroupAdmin notify={notify}/> : path === '/admin/layouts' ? <LayoutEditor notify={notify}/> : path === '/admin/courses' ? <CourseAdmin notify={notify}/> : path === '/admin/sessions' ? <SessionAdmin user={user} notify={notify}/> : path === '/admin/reservations' ? <ReservationAdmin notify={notify}/> : <Logs />}</>;
 }
 function useResource<T>(url: string, initial: T) {
     const [data, setData] = useState<T>(initial), [error, setError] = useState(''), [loading, setLoading] = useState(true);
@@ -109,6 +109,11 @@ function GroupAdmin({ notify }: Props) {
     finally {
         setBusy(false);
     } }}><label>分组名称<input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })}/></label><div className="inline-fields"><label className="check-label"><input type="checkbox" checked={edit.canReserve} onChange={e => setEdit({ ...edit, canReserve: e.target.checked })}/>允许预约</label><label className="check-label"><input type="checkbox" disabled={data.settings?.defaultGroupId === edit.id} checked={isDefault} onChange={e => setIsDefault(e.target.checked)}/>新注册用户默认分组</label></div><h3>每周重复时间窗</h3>{edit.weeklyRules.map((r, i) => <div className="rule-row" key={i}><select aria-label="星期" value={r.weekday} onChange={e => setEdit({ ...edit, weeklyRules: edit.weeklyRules.map((v, j) => j === i ? { ...v, weekday: Number(e.target.value) } : v) })}>{['周日', '周一', '周二', '周三', '周四', '周五', '周六'].map((s, n) => <option value={n} key={n}>{s}</option>)}</select><TimeWindow start={r.startMinute} end={r.endMinute} change={(startMinute, endMinute) => setEdit({ ...edit, weeklyRules: edit.weeklyRules.map((v, j) => i === j ? { ...v, startMinute, endMinute } : v) })}/><button type="button" onClick={() => setEdit({ ...edit, weeklyRules: edit.weeklyRules.filter((_, j) => i !== j) })}>删除</button></div>)}<button type="button" onClick={() => setEdit({ ...edit, weeklyRules: [...edit.weeklyRules, { weekday: 1, startMinute: 480, endMinute: 1080 }] })}><Plus size={14}/>添加每周规则</button><h3>指定日期覆盖</h3><p className="muted small">该日期存在规则时，仅使用该日期的规则。全天禁止可用于节假日关闭。</p>{edit.dateRules.map((r, i) => <div className="rule-row" key={i}><input aria-label="指定日期" type="date" required value={r.date} onChange={e => setEdit({ ...edit, dateRules: edit.dateRules.map((v, j) => i === j ? { ...v, date: e.target.value } : v) })}/><select aria-label="日期允许状态" value={String(r.allowed)} onChange={e => setEdit({ ...edit, dateRules: edit.dateRules.map((v, j) => i === j ? { ...v, allowed: e.target.value === 'true' } : v) })}><option value="true">允许此时间窗</option><option value="false">禁止</option></select><TimeWindow start={r.startMinute} end={r.endMinute} change={(startMinute, endMinute) => setEdit({ ...edit, dateRules: edit.dateRules.map((v, j) => i === j ? { ...v, startMinute, endMinute } : v) })}/><button type="button" onClick={() => setEdit({ ...edit, dateRules: edit.dateRules.filter((_, j) => i !== j) })}>删除</button></div>)}<button type="button" onClick={() => setEdit({ ...edit, dateRules: [...edit.dateRules, { date: localParts(new Date()).date, allowed: false, startMinute: 0, endMinute: 1440 }] })}><Plus size={14}/>添加日期规则</button><button className="primary" disabled={busy}>保存分组权限</button></form></Dialog>}</>;
+}
+function CourseAdmin({ notify }: Props) {
+    const { data, reload, error } = useResource<{ courses: Course[] }>('admin/courses', { courses: [] });
+    const [edit, setEdit] = useState<Course | null>(null), [busy, setBusy] = useState(false);
+    return <><div className="toolbar"><span>{data.courses.length} 门课程</span><button className="primary" onClick={() => setEdit({ id: '', name: '', instructor: '', description: '' })}><Plus size={16}/>创建课程</button></div><ErrorMessage message={error}/><div className="records-grid">{data.courses.map(course => <div className="record-card" key={course.id}><span className="eyebrow">COURSE</span><h2>{course.name}</h2><p>{course.instructor} · 指导教师</p><p className="muted">{course.description || '暂无课程简介'}</p><button onClick={() => setEdit(course)}>编辑课程</button></div>)}</div>{edit && <Dialog title={edit.id ? '编辑课程' : '创建课程'} close={() => setEdit(null)}><form className="form-grid" onSubmit={async event => { event.preventDefault(); setBusy(true); try { await api(edit.id ? `admin/courses/${edit.id}` : 'admin/courses', edit.id ? 'PUT' : 'POST', edit); await reload(); setEdit(null); notify('课程已保存'); } catch (e) { notify((e as Error).message); } finally { setBusy(false); } }}><label>课程名称<input required value={edit.name} onChange={e => setEdit({ ...edit, name: e.target.value })}/></label><label>指导教师<input required value={edit.instructor} onChange={e => setEdit({ ...edit, instructor: e.target.value })}/></label><label>课程简介<textarea value={edit.description} onChange={e => setEdit({ ...edit, description: e.target.value })}/></label><button className="primary" disabled={busy}>保存课程</button></form></Dialog>}</>;
 }
 type SessionForm = {
     id: string;
