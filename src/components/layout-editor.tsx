@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Copy, Save, Send, Armchair, Square, Minus, RotateCw, Trash2, ZoomIn, ZoomOut, MousePointer2 } from 'lucide-react';
 import Modal from './modal';
 import { snapMovement } from '@/lib/geometry';
-import { api, type Layout, type Venue, type Element, type Seat } from '@/lib/types';
+import { announceLayoutUpdate, api, type Layout, type Venue, type Element, type Seat } from '@/lib/types';
 function makeId() { return crypto.randomUUID(); }
 export default function LayoutEditor({ notify }: {
     notify: (s: string) => void;
@@ -42,8 +42,10 @@ export default function LayoutEditor({ notify }: {
         setBusy(true);
         try {
             await api(`layouts/${layout.id}`, 'PUT', layout);
-            if (publish)
+            if (publish) {
                 await api(`layouts/${layout.id}/publish`, 'POST');
+                announceLayoutUpdate();
+            }
             await load(layout.id);
             notify(publish ? '布局已发布，未来预约时段已同步' : '布局草稿已保存');
         }
@@ -60,6 +62,7 @@ export default function LayoutEditor({ notify }: {
         try {
             await api(`layouts/${layout.id}`, 'PUT', layout);
             await api(`layouts/${sourceLayout.id}/overwrite`, 'POST', { draftId: layout.id });
+            announceLayoutUpdate();
             setPublishChoice(false);
             await load(sourceLayout.id);
             notify('已覆盖原布局，绑定该布局的预约时段已同步更新');
@@ -76,6 +79,7 @@ export default function LayoutEditor({ notify }: {
             await api(`layouts/${layout.id}`, 'PUT', layout);
             const result = await api<{ layout: Layout }>('layouts', 'POST', { name: `${layout.name} · 副本`, venueId: layout.venueId, cloneId: layout.id });
             await api(`layouts/${result.layout.id}/publish`, 'POST');
+            announceLayoutUpdate();
             await api(`layouts/${layout.id}`, 'DELETE');
             await load(result.layout.id);
             setPublishChoice(false);
@@ -87,7 +91,7 @@ export default function LayoutEditor({ notify }: {
         }
     }
     async function deleteLayout() {
-        if (!layout || !confirm(`确认删除布局“${layout.name}”？删除后不能恢复。`)) return;
+        if (!layout || !confirm(`确认删除布局“${layout.name}”？关联的已暂停时段及其预约历史也会一并删除；仍有有效预约或未暂停的时段时无法删除。此操作不能恢复。`)) return;
         setBusy(true);
         try {
             await api(`layouts/${layout.id}`, 'DELETE');

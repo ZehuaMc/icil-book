@@ -1,6 +1,6 @@
 import { db, serial, type Tx } from './db';
 import { check } from './errors';
-import { groupAllows } from './rules';
+import { groupAllows, maxMemberBookingTime } from './rules';
 import { isOperator } from './auth';
 function formatShanghai(date: Date) {
     return date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
@@ -23,6 +23,12 @@ async function bookingContext(tx: Tx, actorId: string, sessionId: string) {
     check(session, '场次不存在', 404);
     return { user, session };
 }
+async function activeBookingBlock(tx: Tx, startsAt: Date, endsAt: Date) {
+    return tx.bookingBlock.findFirst({
+        where: { active: true, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
+        orderBy: { startsAt: 'asc' },
+    });
+}
 export async function reserveSeat(actorId: string, sessionId: string, seatId: string, requestedStartsAt?: string, requestedEndsAt?: string) {
     return serial(async (tx) => {
         const { user, session } = await bookingContext(tx, actorId, sessionId);
@@ -31,10 +37,20 @@ export async function reserveSeat(actorId: string, sessionId: string, seatId: st
         const endsAt = requestedEndsAt ? new Date(requestedEndsAt) : session.endsAt;
         check(!session.cancelledAt, '此时段已取消，不能预约');
         check(Number.isFinite(startsAt.getTime()) && Number.isFinite(endsAt.getTime()) && endsAt > startsAt, '请选择有效的预约时间');
-        check(startsAt >= session.startsAt && endsAt <= session.endsAt, '学员预约时间必须在管理员开放时段内');
+        if (!operator && user.memberType === 'ICIL')
+            check(session.icilOnly, 'ICIL成员请从全天预约入口选择日期和工位', 403);
+        check(startsAt >= session.startsAt && endsAt <= session.endsAt, !operator && user.memberType === 'ICIL' ? 'ICIL预约时间必须在所选日期内' : '学员预约时间必须在管理员开放时段内');
         check(startsAt > new Date(), '预约开始时间必须在当前时间之后');
-        check(operator || session.open, '管理员尚未开放此时间，暂未开放选座');
-        check(operator || groupAllows(user.group, startsAt, endsAt), '所属分组不允许预约此时段', 403);
+        const block = await activeBookingBlock(tx, startsAt, endsAt);
+        check(!block, block?.kind === 'DAY' ? '该日期已禁用预约' : '该时段已禁用预约', 403);
+        if (!operator) {
+            check(endsAt <= maxMemberBookingTime(), '成员最多只能提前一天预约', 403);
+            if (user.memberType === 'YSYX') {
+                check(session.open, '管理员尚未开放此时间，暂未开放选座', 403);
+                check(await tx.reservation.count({ where: { sessionId, cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } } } }) > 0, '当前时段暂无管理员工位，暂不能预约', 403);
+                check(groupAllows(user.group, startsAt, endsAt), '所属分组不允许预约此时段', 403);
+            }
+        }
         const seat = await tx.seat.findUnique({ where: { id: seatId } });
         check(seat?.enabled && seat.layoutId === session.layoutId && (operator || !seat.fixedForAssistant), seat?.fixedForAssistant ? '该座位为管理员固定工位，学员不可预约' : '管理员或学员才可以预约此座位', 403);
         check(!await tx.reservation.findFirst({ where: { sessionId, userId: actorId, cancelledAt: null } }), '每人每场只能预约一个座位', 409);
@@ -79,7 +95,7 @@ export async function cancelReservation(actorId: string, id: string) {
             });
             if (remainingAdmins === 0) {
                 const learners = await tx.reservation.findMany({
-                    where: { sessionId: session.id, cancelledAt: null, user: { role: 'USER' } },
+                    where: { sessionId: session.id, cancelledAt: null, user: { role: 'USER', memberType: 'YSYX' } },
                     select: { id: true, userId: true, seat: { select: { code: true } } },
                 });
                 if (learners.length) {
@@ -94,8 +110,7 @@ export async function cancelReservation(actorId: string, id: string) {
                         })),
                     });
                 }
-                await tx.session.update({ where: { id: session.id }, data: { open: false, cancelledAt } });
-                await audit(tx, actorId, 'SESSION_CANCELLED', session.id, { reason: 'NO_ADMIN_BOOKING', cancelledLearners: learners.length });
+                await audit(tx, actorId, 'SESSION_ADMIN_UNREADY', session.id, { reason: 'NO_ADMIN_BOOKING', cancelledLearners: learners.length });
             }
         }
         return result;
@@ -127,6 +142,7 @@ export async function replaceAdminSeat(actorId: string, sessionId: string, seatI
         ]);
         check(user?.enabled && isOperator(user), '需要管理员权限', 403);
         check(session, '场次不存在', 404);
+        check(!session.icilOnly, 'ICIL全天预约不能选择管理员工位', 409);
         check(!session.cancelledAt, '此时段已取消，不能更换工位');
         check(session.startsAt > new Date(), '已开始场次不能更换工位');
         check(!session.open, '请先暂停开放此时间，再更换管理员工位', 409);
@@ -204,7 +220,7 @@ export async function createAssistantSession(actorId: string, layoutId: string, 
         check(course, '系统尚未初始化自习室课程配置', 503);
         // Touching windows (2-6 then 6-9) are allowed; true overlaps merge into one wider window.
         const overlaps = await tx.session.findMany({
-            where: { open: true, cancelledAt: null, layout: { venueId: layout.venueId }, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
+            where: { open: true, cancelledAt: null, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
             orderBy: { startsAt: 'asc' },
         });
         check(overlaps.every(s => s.endsAt.getTime() - s.startsAt.getTime() <= 86400000), '该场地已有开放时段过长', 409);
@@ -218,7 +234,7 @@ export async function createAssistantSession(actorId: string, layoutId: string, 
                     changed = true;
                 }
         }
-        const stillOverlapping = await tx.session.count({ where: { open: true, cancelledAt: null, layout: { venueId: layout.venueId }, startsAt: { lt: mergedEnd }, endsAt: { gt: mergedStart } } });
+        const stillOverlapping = await tx.session.count({ where: { open: true, cancelledAt: null, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: mergedEnd }, endsAt: { gt: mergedStart } } });
         check(stillOverlapping === overlaps.length, '该场地在此时间段刚有新的场次，请重试', 409);
         if (overlaps.length) {
             const keep = overlaps[0];

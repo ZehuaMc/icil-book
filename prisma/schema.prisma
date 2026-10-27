@@ -13,6 +13,16 @@ enum Role {
   ADMIN
 }
 
+enum MemberType {
+  YSYX
+  ICIL
+}
+
+enum BookingBlockKind {
+  SESSION
+  DAY
+}
+
 enum LayoutStatus {
   DRAFT
   PUBLISHED
@@ -69,6 +79,7 @@ model User {
   email         String                @unique
   passwordHash  String
   role          Role                  @default(USER)
+  memberType    MemberType            @default(YSYX)
   enabled       Boolean               @default(true)
   deletedAt     DateTime?             @db.Timestamptz(3)
   groupId       String
@@ -80,6 +91,7 @@ model User {
   adminBookings SessionAdminBooking[]
   auditLogs     AuditLog[]
   notifications Notification[]
+  bookingBlocks BookingBlock[]
 
   @@unique([studentId, role])
 }
@@ -165,12 +177,35 @@ model Session {
   createdAt          DateTime              @default(now()) @db.Timestamptz(3)
   requiredAssistants Int                   @default(1)
   open               Boolean               @default(true)
+  // Internal all-day availability container for ICIL members. It is hidden
+  // from the administrator's session list and is controlled only by booking
+  // blocks, not by administrator coverage/opening.
+  icilOnly           Boolean               @default(false)
   cancelledAt        DateTime?             @db.Timestamptz(3)
   coverage           AssistantCoverage[]
   adminBookings      SessionAdminBooking[]
+  bookingBlocks      BookingBlock[]
   reservations       Reservation[]
 
   @@index([startsAt])
+  @@index([icilOnly])
+}
+
+model BookingBlock {
+  id          String           @id @default(cuid())
+  kind        BookingBlockKind
+  startsAt    DateTime         @db.Timestamptz(3)
+  endsAt      DateTime         @db.Timestamptz(3)
+  sessionId   String?
+  session     Session?         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  reason      String           @default("")
+  active      Boolean          @default(true)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  createdById String
+  createdBy   User             @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([startsAt, endsAt, active])
+  @@index([sessionId, active])
 }
 
 model SessionAdminBooking {
