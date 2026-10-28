@@ -10,12 +10,16 @@ import { check, HttpError } from '@/lib/errors';
 import { assertSameOrigin, readJson as body } from '@/lib/request';
 import { reserveSeat, cancelReservation, checkInReservation, replaceAdminSeat, addCoverage, createAssistantSession, removeCoverage, expireUnconfirmedReservations, audit } from '@/lib/bookings';
 import { groupAllows, maxMemberBookingTime, localParts } from '@/lib/rules';
-import { password, studentId, groupSchema, courseSchema, layoutSchema, sessionSchema, id } from '@/lib/validation';
+import { password, studentId, groupSchema, layoutSchema, sessionSchema, id } from '@/lib/validation';
 export const runtime = 'nodejs';
-const sessionInclude = { course: true, layout: { include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' as const } } } }, coverage: { include: { assistant: { select: { id: true, name: true } } } }, adminBookings: { include: { admin: { select: { id: true, name: true } } } }, reservations: { where: { cancelledAt: null }, select: { id: true, userId: true, seatId: true, startsAt: true, endsAt: true, checkedInAt: true, user: { select: { role: true } } } } } as const;
-const recordInclude = { session: { include: { course: true, layout: { include: { venue: true } } } }, seat: true, user: { select: { id: true, name: true, studentId: true, email: true, role: true } } } as const;
+const sessionInclude = { layout: { include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' as const } } } }, coverage: { include: { assistant: { select: { id: true, name: true } } } }, adminBookings: { include: { admin: { select: { id: true, name: true } } } }, reservations: { where: { cancelledAt: null }, select: { id: true, userId: true, seatId: true, startsAt: true, endsAt: true, checkedInAt: true, user: { select: { role: true } } } } } as const;
+const recordInclude = { session: { include: { layout: { include: { venue: true } } } }, seat: true, user: { select: { id: true, name: true, studentId: true, email: true, role: true } } } as const;
 const ADMIN_REGISTRATION_KEY = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
 type SessionView = Prisma.SessionGetPayload<{ include: typeof sessionInclude }>;
+function withoutLegacyCourse<T extends { courseId?: unknown }>(value: T) {
+    const { courseId: _courseId, ...rest } = value;
+    return rest;
+}
 function sessionsOverlap(a: SessionView, b: SessionView) {
     return a.layout.venueId === b.layout.venueId && a.startsAt < b.endsAt && a.endsAt > b.startsAt;
 }
@@ -90,9 +94,6 @@ async function ensureIcilDaySessions() {
     const latestByVenue = new Map<string, (typeof layouts)[number]>();
     for (const layout of layouts)
         if (!latestByVenue.has(layout.venueId)) latestByVenue.set(layout.venueId, layout);
-    const course = await db.course.findFirst({ orderBy: { id: 'asc' }, select: { id: true } });
-    if (!course)
-        return [] as string[];
     return serial(async (tx) => {
         const ids: string[] = [];
         for (const layout of latestByVenue.values()) for (const dateKey of dateKeys) {
@@ -100,7 +101,7 @@ async function ensureIcilDaySessions() {
             const sessionId = icilDayId(layout.venueId, dateKey);
             const existing = await tx.session.upsert({
                 where: { id: sessionId },
-                create: { id: sessionId, courseId: course.id, layoutId: layout.id, startsAt: start, endsAt: end, requiredAssistants: 1, open: true, icilOnly: true },
+                create: { id: sessionId, layoutId: layout.id, startsAt: start, endsAt: end, requiredAssistants: 1, open: true, icilOnly: true },
                 update: {},
                 select: { id: true, layoutId: true, icilOnly: true },
             });
@@ -281,7 +282,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         return { sessions: mergedSessions.map(s => {
             const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt);
             const fullSessionBlock = matchingBlocks.some(block => block.kind === 'DAY' || (block.startsAt <= s.startsAt && block.endsAt >= s.endsAt));
-            return { ...s, adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
+            return { ...withoutLegacyCourse(s), adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
         }) };
     }
     const user = await requireUser();
@@ -325,7 +326,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         return { reservation: await reserveSeat(user.id, data.sessionId, data.seatId, data.startsAt, data.endsAt) };
     }
     if (key === 'reservations' && method === 'GET')
-        return { reservations: await db.reservation.findMany({ where: { userId: user.id }, include: recordInclude, orderBy: { createdAt: 'desc' }, take: 200 }), coverage: await db.assistantCoverage.findMany({ where: { assistantId: user.id }, include: { session: { include: { course: true, layout: { include: { venue: true } } } } }, orderBy: { createdAt: 'desc' } }) };
+        return { reservations: await db.reservation.findMany({ where: { userId: user.id }, include: recordInclude, orderBy: { createdAt: 'desc' }, take: 200 }), coverage: await db.assistantCoverage.findMany({ where: { assistantId: user.id }, include: { session: { include: { layout: { include: { venue: true } } } } }, orderBy: { createdAt: 'desc' } }) };
     if (path[0] === 'reservations' && path.length === 2 && method === 'DELETE')
         return cancelReservation(user.id, path[1]);
     if (path[0] === 'reservations' && path.length === 3 && path[2] === 'check-in' && method === 'POST')
@@ -744,18 +745,12 @@ async function dispatch(req: NextRequest, path: string[]) {
             await audit(tx, user.id, 'LAYOUT_PUBLISH', layout.id, { syncedSessions: futureSessions.length });
             return { ok: true, syncedSessions: futureSessions.length };
         });
-    if (key === 'admin/courses' && method === 'GET')
-        return { courses: await db.course.findMany({ orderBy: { name: 'asc' } }) };
-    if ((key === 'admin/courses' && method === 'POST') || (path[0] === 'admin' && path[1] === 'courses' && path.length === 3 && method === 'PUT')) {
-        const data = courseSchema.parse(await body(req));
-        return serial(async (tx) => { const course = path[2] ? await tx.course.update({ where: { id: path[2] }, data }) : await tx.course.create({ data }); await audit(tx, user.id, 'COURSE_SAVE', course.id, data); return { course }; });
-    }
     if (key === 'admin/sessions' && method === 'GET') {
         const [sessions, blocks] = await Promise.all([
             db.session.findMany({ where: { icilOnly: false }, include: sessionInclude, orderBy: { startsAt: 'desc' }, take: 500 }),
             db.bookingBlock.findMany({ where: { active: true }, orderBy: { startsAt: 'asc' } }),
         ]);
-        return { sessions: sessions.map(s => { const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt); return { ...s, adminReady: s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY') }; }) };
+        return { sessions: sessions.map(s => { const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt); return { ...withoutLegacyCourse(s), adminReady: s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY') }; }) };
     }
     if ((key === 'sessions' && method === 'POST') || (path[0] === 'sessions' && path.length === 2 && method === 'PUT')) {
         const data = sessionSchema.parse(await body(req));
@@ -777,7 +772,6 @@ async function dispatch(req: NextRequest, path: string[]) {
                 check(!existing.cancelledAt, '已取消时段不可修改');
                 check(existing.startsAt > new Date(), '已开始场次不可修改');
                 if (existing._count.reservations || existing._count.coverage) {
-                    check(!data.courseId || existing.courseId === data.courseId, '已有预约，不能修改课程');
                     check(existing.layoutId === data.layoutId && existing.startsAt.getTime() === Date.parse(data.startsAt) && existing.endsAt.getTime() === Date.parse(data.endsAt), '已有预约，不能修改时间或布局');
                 }
                 if (await tx.reservation.count({ where: { sessionId: existing.id, cancelledAt: null } }))
@@ -786,12 +780,10 @@ async function dispatch(req: NextRequest, path: string[]) {
             // One venue cannot host overlapping open sessions. Serializable predicate checks prevent races.
             if (data.open)
                 check(!await tx.session.findFirst({ where: { id: { not: path[1] ?? '' }, open: true, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: new Date(data.endsAt) }, endsAt: { gt: new Date(data.startsAt) } } }), '此场地在该时段已有开放场次', 409);
-            const course = data.courseId ? await tx.course.findUnique({ where: { id: data.courseId } }) : await tx.course.findFirst({ orderBy: { id: 'asc' } });
-            check(course, '系统尚未初始化自习室配置', 503);
-            const values = { courseId: course.id, layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open, startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
+            const values = { layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open, startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
             const session = path[1] ? await tx.session.update({ where: { id: path[1] }, data: values }) : await tx.session.create({ data: values });
             await audit(tx, user.id, 'SESSION_SAVE', session.id, data);
-            return { session };
+            return { session: withoutLegacyCourse(session) };
         });
     }
     if (key === 'admin/reservations' && method === 'GET') {
@@ -802,7 +794,7 @@ async function dispatch(req: NextRequest, path: string[]) {
             const csv = [['姓名', '学号', '开始时间（上海）', '结束时间（上海）', '座位', '状态'], ...reservations.map(r => [r.user.name, r.user.studentId, r.startsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }), r.endsAt.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }), r.seat.code, r.cancelledAt ? '已取消' : '已预约'])].map(row => row.map(safe).join(',')).join('\r\n');
             return new NextResponse('\uFEFF' + csv, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="reservations.csv"', 'Cache-Control': 'no-store' } });
         }
-        return { reservations, coverage: await db.assistantCoverage.findMany({ where: { sessionId }, include: { assistant: { select: { name: true, email: true } }, session: { include: { course: true } } }, orderBy: { createdAt: 'desc' }, take: 5000 }) };
+        return { reservations, coverage: await db.assistantCoverage.findMany({ where: { sessionId }, include: { assistant: { select: { name: true, email: true } } }, orderBy: { createdAt: 'desc' }, take: 5000 }) };
     }
     if (key === 'admin/logs' && method === 'GET')
         return { logs: await db.auditLog.findMany({ include: { actor: { select: { name: true, email: true } } }, orderBy: { createdAt: 'desc' }, take: 200 }) };

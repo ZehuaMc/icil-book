@@ -25,5 +25,4 @@ export const layoutSchema = z.object({
     if ([...v.elements, ...v.seats].some(e => !insideCanvas(e, v.width, v.height)))
         ctx.addIssue({ code: 'custom', message: '元素尺寸或旋转后范围超出画布' });
 });
-export const courseSchema = z.object({ name: z.string().trim().min(1).max(100), instructor: z.string().trim().min(1).max(80), description: z.string().max(1000).default('') });
-export const sessionSchema = z.object({ courseId: id.optional(), layoutId: id, startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }), requiredAssistants: z.number().int().min(1).max(30).default(1), open: z.boolean() }).refine(v => Date.parse(v.endsAt) > Date.parse(v.startsAt), '结束时间必须晚于开始时间').refine(v => Date.parse(v.endsAt) - Date.parse(v.startsAt) <= 86400000, '时长不能超过 24 小时');
+export const sessionSchema = z.object({ layoutId: id, startsAt: z.string().datetime({ offset: true }), endsAt: z.string().datetime({ offset: true }), requiredAssistants: z.number().int().min(1).max(30).default(1), open: z.boolean() }).refine(v => Date.parse(v.endsAt) > Date.parse(v.startsAt), '结束时间必须晚于开始时间').refine(v => Date.parse(v.endsAt) - Date.parse(v.startsAt) <= 86400000, '时长不能超过 24 小时');

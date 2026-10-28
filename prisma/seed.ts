@@ -25,9 +25,6 @@ async function main() {
                         await tx.seat.create({ data: { id: `seed-seat-${code}${row * 4 + n + 1}`, layoutId: 'seed-layout', elementId: element.id, code: `${code}${String(row * 4 + n + 1).padStart(2, '0')}`, x: x + 28 + (n % 2) * 100, y: y + (n < 2 ? -58 : 90), rotation: 0, enabled: !(col === 2 && row === 1 && n === 3) } });
                 }
         });
-    const courses = [{ id: 'seed-course-1', name: '嵌入式系统实践', instructor: '张老师', description: '从基础电路到系统设计，在实践中发现硬件的无限可能。' }, { id: 'seed-course-2', name: '数字逻辑与 FPGA 设计', instructor: '李老师', description: '用逻辑搭建创意，用硬件实现想象。' }, { id: 'seed-course-3', name: '开放实验 · 自主探索', instructor: '王老师', description: '为你的项目留一段专注探索的时间。' }];
-    for (const c of courses)
-        await db.course.upsert({ where: { id: c.id }, update: {}, create: c });
     console.log('初始化完成：管理员和学员账号、23 个可预约工位。管理员创建并开放未来时段后，学员才能预约。账号密码来自 SEED_PASSWORD。');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; }).finally(() => db.$disconnect());

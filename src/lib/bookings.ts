@@ -218,8 +218,6 @@ export async function createAssistantSession(actorId: string, layoutId: string, 
         const layout = await tx.layoutVersion.findUnique({ where: { id: layoutId } });
         check(layout?.status === 'PUBLISHED', '请选择已发布的布局');
         await lockInvariant(tx, `session-overlap:${layout.venueId}`);
-        const course = await tx.course.findFirst({ orderBy: { name: 'asc' } });
-        check(course, '系统尚未初始化自习室课程配置', 503);
         // Touching windows (2-6 then 6-9) are allowed; true overlaps merge into one wider window.
         const overlaps = await tx.session.findMany({
             where: { open: true, cancelledAt: null, icilOnly: false, layout: { venueId: layout.venueId }, startsAt: { lt: endsAt }, endsAt: { gt: startsAt } },
@@ -258,7 +256,7 @@ export async function createAssistantSession(actorId: string, layoutId: string, 
             await audit(tx, actorId, 'SESSION_MERGED', keep.id, { layoutId, startsAt: mergedStart, endsAt: mergedEnd, merged: overlaps.map(s => s.id) });
             return { session: await tx.session.findUniqueOrThrow({ where: { id: keep.id }, include: { coverage: true, adminBookings: true } }), coverage: await tx.assistantCoverage.findFirstOrThrow({ where: { sessionId: keep.id, assistantId: actorId } }) };
         }
-        const session = await tx.session.create({ data: { courseId: course.id, layoutId, startsAt, endsAt, requiredAssistants: 1, open: true } });
+        const session = await tx.session.create({ data: { layoutId, startsAt, endsAt, requiredAssistants: 1, open: true } });
         const coverage = await tx.assistantCoverage.create({ data: { sessionId: session.id, assistantId: actorId } });
         await audit(tx, actorId, 'ASSISTANT_SESSION_CREATE', session.id, { layoutId, startsAt, endsAt });
         return { session, coverage };

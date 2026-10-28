@@ -67,16 +67,8 @@ export type Layout = {
     elements: Element[];
     seats: Seat[];
 };
-export type Course = {
-    id: string;
-    name: string;
-    instructor: string;
-    description: string;
-};
 export type Session = {
     id: string;
-    courseId: string;
-    course: Course;
     layoutId: string;
     layout: Layout;
     startsAt: string;

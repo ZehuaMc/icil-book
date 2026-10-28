@@ -168,8 +168,9 @@ model Course {
 
 model Session {
   id                 String                @id @default(cuid())
-  courseId           String
-  course             Course                @relation(fields: [courseId], references: [id])
+  // Legacy compatibility only. Study-room sessions have no course.
+  courseId           String?
+  course             Course?               @relation(fields: [courseId], references: [id])
   layoutId           String
   layout             LayoutVersion         @relation(fields: [layoutId], references: [id])
   startsAt           DateTime              @db.Timestamptz(3)
