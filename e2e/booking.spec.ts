@@ -30,12 +30,11 @@ test('学号注册、登录、管理员开放场次、学员预约与后台 CSV 
     const studentId = `e2e${suffix}`;
     const studentPassword = 'Booking-Password-2026!';
     let learnerId = '';
-    const course = await db.course.create({ data: { name: `端到端课程 ${suffix}`, instructor: '测试教师' } });
     const venue = await db.venue.create({ data: { name: `浏览器验收 ${suffix}`, location: '测试场地' } });
     const layout = await db.layoutVersion.create({ data: { name: `浏览器布局 ${suffix}`, venueId: venue.id, status: 'PUBLISHED', publishedAt: new Date(), seats: { create: [{ code: 'A01', x: 100, y: 100 }, { code: 'A02', x: 200, y: 100 }, { code: 'STAFF', x: 300, y: 100, fixedForAssistant: true }] } }, include: { seats: true } });
     const startsAt = new Date(Math.ceil(Date.now() / 60000) * 60000 + 67 * 60000);
     const endsAt = new Date(startsAt.getTime() + 37 * 60000);
-    const session = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: false } });
+    const session = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: false } });
     const adminContext = await browser.newContext({ baseURL });
     const learnerContext = await browser.newContext({ baseURL });
     const admin = await adminContext.newPage();
@@ -86,7 +85,6 @@ test('学号注册、登录、管理员开放场次、学员预约与后台 CSV 
         await db.sessionAdminBooking.deleteMany({ where: { sessionId: session.id } });
         await db.assistantCoverage.deleteMany({ where: { sessionId: session.id } });
         await db.session.delete({ where: { id: session.id } });
-        await db.course.delete({ where: { id: course.id } });
         await db.layoutVersion.delete({ where: { id: layout.id } });
         await db.venue.delete({ where: { id: venue.id } });
         if (learnerId) {
@@ -124,25 +122,22 @@ test('管理员创建布局、添加座位、发布后锁定编辑', async ({ pa
     }
 });
 
-test('学员无权访问后台，管理员登录可创建课程和场次', async ({ playwright, baseURL }) => {
+test('学员无权访问后台，管理员登录可创建场次', async ({ playwright, baseURL }) => {
     const learner = await playwright.request.newContext({ baseURL });
     const admin = await playwright.request.newContext({ baseURL });
     const suffix = randomUUID().slice(0, 8);
-    let courseId = '', sessionId = '';
+    let sessionId = '';
     try {
         expect((await learner.get('/api/admin/users')).status()).toBe(401);
         expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey: 'wrong' } })).status()).toBe(403);
         expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey } })).ok()).toBeTruthy();
-        const course = await admin.post('/api/admin/courses', { data: { name: `API 课程 ${suffix}`, instructor: '测试教师' } });
-        expect(course.ok()).toBeTruthy(); courseId = (await course.json()).course.id;
         const startsAt = new Date(Date.now() + 3 * 3600000);
         const endsAt = new Date(startsAt.getTime() + 3600000);
-        const created = await admin.post('/api/sessions', { data: { courseId, layoutId: 'seed-layout', startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), requiredAssistants: 1, open: false } });
+        const created = await admin.post('/api/sessions', { data: { layoutId: 'seed-layout', startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), requiredAssistants: 1, open: false } });
         expect(created.ok()).toBeTruthy(); sessionId = (await created.json()).session.id;
         expect((await learner.post('/api/reservations/coverage', { data: { sessionId } })).status()).toBe(401);
     } finally {
         if (sessionId) await db.session.delete({ where: { id: sessionId } });
-        if (courseId) await db.course.delete({ where: { id: courseId } });
         await Promise.all([learner.dispose(), admin.dispose()]);
     }
 });

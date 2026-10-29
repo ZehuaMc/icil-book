@@ -9,7 +9,7 @@ assert.ok(process.env.DATABASE_URL, 'DATABASE_URL 未设置：请配置专用测
 test('PostgreSQL: 管理员开放、换座、暂停、授权和并发预约', async (t) => {
     const prefix = `test-${randomUUID()}`;
     await db.$connect();
-    let sessionId = '', groupId = '', layoutId = '', courseId = '', venueId = '';
+    let sessionId = '', groupId = '', layoutId = '', venueId = '';
     const ids = [0, 1, 2, 3, 4, 5].map(i => `${prefix}-user-${i}`);
     try {
         const group = await db.group.create({ data: { name: prefix, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
@@ -20,11 +20,9 @@ test('PostgreSQL: 管理员开放、换座、暂停、授权和并发预约', as
         venueId = venue.id;
         const layout = await db.layoutVersion.create({ data: { venueId, name: prefix, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 100, y: 100 }, { code: 'A02', x: 200, y: 100 }, { code: 'A03', x: 300, y: 100 }, { code: 'X01', x: 400, y: 100, enabled: false }] } }, include: { seats: true } });
         layoutId = layout.id;
-        const course = await db.course.create({ data: { name: prefix, instructor: 'Test' } });
-        courseId = course.id;
         const tomorrow = new Date(Date.now() + 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
         const startsAt = new Date(`${tomorrow}T09:00:00+08:00`), endsAt = new Date(`${tomorrow}T11:00:00+08:00`);
-        const session = await db.session.create({ data: { courseId, layoutId, startsAt, endsAt, open: false } });
+        const session = await db.session.create({ data: { layoutId, startsAt, endsAt, open: false } });
         sessionId = session.id;
         const a = layout.seats.find(s => s.code === 'A01')!, b = layout.seats.find(s => s.code === 'A02')!, c = layout.seats.find(s => s.code === 'A03')!, disabled = layout.seats.find(s => s.code === 'X01')!;
 
@@ -106,8 +104,6 @@ test('PostgreSQL: 管理员开放、换座、暂停、授权和并发预约', as
         await db.assistantCoverage.deleteMany({ where: { assistantId: { in: ids } } });
         if (sessionId)
             await db.session.delete({ where: { id: sessionId } });
-        if (courseId)
-            await db.course.delete({ where: { id: courseId } });
         if (layoutId)
             await db.layoutVersion.delete({ where: { id: layoutId } });
         if (venueId)

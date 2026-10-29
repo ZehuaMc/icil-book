@@ -61,12 +61,11 @@ test('管理员开放重叠时段时合并时间并保留两边预约', async ()
     const otherAdmin = await db.user.create({ data: { name: '另一个管理员', studentId: `mb${suffix}`, email: `mb${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `merge-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `merge-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }] } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const day = new Date(Date.now() + 3 * 86400000);
     day.setUTCHours(0, 0, 0, 0);
     const startsAt = new Date(day.getTime() + 2 * 3600000), overlapStart = new Date(day.getTime() + 4 * 3600000), firstEnd = new Date(day.getTime() + 6 * 3600000), endsAt = new Date(day.getTime() + 9 * 3600000);
-    const target = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt, endsAt: firstEnd, open: false } });
-    const existing = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt: overlapStart, endsAt, open: true } });
+    const target = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt: firstEnd, open: false } });
+    const existing = await db.session.create({ data: { layoutId: layout.id, startsAt: overlapStart, endsAt, open: true } });
     const reservationStart = new Date(day.getTime() + 4 * 3600000), reservationEnd = new Date(day.getTime() + 5 * 3600000);
     await db.reservation.create({ data: { sessionId: target.id, seatId: layout.seats[0].id, userId: admin.id, startsAt, endsAt: firstEnd } });
     await db.reservation.create({ data: { sessionId: existing.id, seatId: layout.seats[0].id, userId: admin.id, startsAt: reservationStart, endsAt: reservationEnd } });
@@ -104,9 +103,8 @@ test('管理员暂停时释放YSYX预约，随后可以更换工位', async () =
     const learner = await db.user.create({ data: { name: '换座学员', studentId: `su${suffix}`, email: `su${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `seat-change-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `seat-change-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }, { code: 'A03', x: 30, y: 10 }] } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const startsAt = new Date(Date.now() + 86400000), endsAt = new Date(Date.now() + 86400000 + 2 * 3600000);
-    const session = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt, endsAt, open: false } });
+    const session = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt, open: false } });
     const adminToken = randomUUID(), learnerToken = randomUUID();
     try {
         const expiresAt = new Date(Date.now() + 60000);
@@ -192,12 +190,11 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
     const ysyx = await db.user.create({ data: { name: 'YSYX成员', studentId: `ys${suffix}`, email: `ys${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `member-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `member-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }] } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
     const adminSlotStart = new Date(`${date}T10:00:00+08:00`), adminSlotEnd = new Date(`${date}T11:00:00+08:00`);
-    const adminSession = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt: adminSlotStart, endsAt: adminSlotEnd, open: false } });
+    const adminSession = await db.session.create({ data: { layoutId: layout.id, startsAt: adminSlotStart, endsAt: adminSlotEnd, open: false } });
     await db.reservation.create({ data: { sessionId: adminSession.id, seatId: layout.seats[0].id, userId: admin.id, startsAt: adminSlotStart, endsAt: adminSlotEnd } });
     const icilToken = randomUUID(), ysyxToken = randomUUID(), adminToken = randomUUID();
     let icilSessionId = '';
@@ -249,10 +246,9 @@ test('发布布局同步最近的未来空时段，已有预约的时段保留�
     const venue = await db.venue.create({ data: { name: `layout-sync-venue-${suffix}`, location: 'test' } });
     const source = await db.layoutVersion.create({ data: { name: `old-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: { code: 'A01', x: 10, y: 10 } } }, include: { seats: true } });
     const draft = await db.layoutVersion.create({ data: { name: `new-${suffix}`, venueId: venue.id, sourceLayoutId: source.id, status: 'DRAFT', seats: { create: { code: 'A01', x: 80, y: 80 } } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const nearest = new Date(Date.now() + 3 * 3600000), later = new Date(Date.now() + 6 * 3600000);
-    const nearestSession = await db.session.create({ data: { courseId: course.id, layoutId: source.id, startsAt: nearest, endsAt: new Date(nearest.getTime() + 3600000) } });
-    const bookedSession = await db.session.create({ data: { courseId: course.id, layoutId: source.id, startsAt: later, endsAt: new Date(later.getTime() + 3600000) } });
+    const nearestSession = await db.session.create({ data: { layoutId: source.id, startsAt: nearest, endsAt: new Date(nearest.getTime() + 3600000) } });
+    const bookedSession = await db.session.create({ data: { layoutId: source.id, startsAt: later, endsAt: new Date(later.getTime() + 3600000) } });
     const booking = await db.reservation.create({ data: { sessionId: bookedSession.id, seatId: source.seats[0].id, userId: learner.id, startsAt: later, endsAt: new Date(later.getTime() + 3600000) } });
     const token = randomUUID();
     try {
@@ -282,9 +278,8 @@ test('暂停时段且没有有效预约后可以删除关联布局', async () =>
     const learner = await db.user.create({ data: { name: '布局删除学员', studentId: `le${suffix}`, email: `le${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `layout-delete-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `layout-delete-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }] } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const startsAt = new Date(Date.now() + 86400000), endsAt = new Date(Date.now() + 90000000);
-    const session = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt, endsAt, open: false } });
+    const session = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt, open: false } });
     const token = randomUUID();
     try {
         await db.reservation.create({ data: { sessionId: session.id, seatId: layout.seats[0].id, userId: learner.id, startsAt, endsAt, cancelledAt: new Date() } });
@@ -319,10 +314,9 @@ test('ICIL成员改回YSYX后没有管理员值守的预约会自动释放', asy
     const member = await db.user.create({ data: { name: '降级成员', studentId: `dm${suffix}`, email: `dm${suffix}@test.local`, passwordHash: 'unused', role: 'USER', memberType: 'ICIL', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `downgrade-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `downgrade-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }] } }, include: { seats: true } });
-    const course = await db.course.findFirstOrThrow();
     const start = new Date(Date.now() + 4 * 3600000), end = new Date(Date.now() + 5 * 3600000);
-    const staffed = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt: start, endsAt: end, open: true } });
-    const unstaffed = await db.session.create({ data: { courseId: course.id, layoutId: layout.id, startsAt: new Date(start.getTime() + 2 * 3600000), endsAt: new Date(end.getTime() + 2 * 3600000), open: true } });
+    const staffed = await db.session.create({ data: { layoutId: layout.id, startsAt: start, endsAt: end, open: true } });
+    const unstaffed = await db.session.create({ data: { layoutId: layout.id, startsAt: new Date(start.getTime() + 2 * 3600000), endsAt: new Date(end.getTime() + 2 * 3600000), open: true } });
     await db.reservation.createMany({ data: [
         { sessionId: staffed.id, seatId: layout.seats[0].id, userId: member.id, startsAt: start, endsAt: end },
         { sessionId: unstaffed.id, seatId: layout.seats[1].id, userId: member.id, startsAt: new Date(start.getTime() + 2 * 3600000), endsAt: new Date(end.getTime() + 2 * 3600000) },

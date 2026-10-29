@@ -7,9 +7,9 @@ const db = new PrismaClient();
 type Fixture = {
     admin: APIRequestContext; assistant: APIRequestContext; learner: APIRequestContext;
     users: { id: string; studentId: string; email: string; name: string; role: string; groupId: string; enabled: boolean }[];
-    groupId: string; venueId: string; layoutId: string; courseId: string; sessionId: string;
+    groupId: string; venueId: string; layoutId: string; sessionId: string;
     seats: { id: string; code: string }[]; tokens: string[];
-    input: { courseId: string; layoutId: string; startsAt: string; endsAt: string; requiredAssistants: number; open: boolean };
+    input: { layoutId: string; startsAt: string; endsAt: string; requiredAssistants: number; open: boolean };
 };
 const test = base.extend<{ data: Fixture }>({
     data: async ({ playwright, baseURL }, use) => {
@@ -17,10 +17,9 @@ const test = base.extend<{ data: Fixture }>({
         const group = await db.group.create({ data: { name: prefix, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
         const venue = await db.venue.create({ data: { name: prefix, location: '验收场地' } });
         const layout = await db.layoutVersion.create({ data: { name: prefix, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'T01', x: 100, y: 100 }, { code: 'T02', x: 200, y: 100 }, { code: 'STAFF', x: 300, y: 100, fixedForAssistant: true }] } }, include: { seats: true } });
-        const course = await db.course.create({ data: { name: `${prefix}课程`, instructor: '验收教师' } });
         const startsAt = new Date(Math.ceil(Date.now() / 60000) * 60000 + 3600000).toISOString();
         const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
-        const input = { courseId: course.id, layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: true };
+        const input = { layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: true };
         const session = await db.session.create({ data: input });
         const users = [], contexts: APIRequestContext[] = [], tokens: string[] = [];
         for (const [i, role] of (['ADMIN', 'ADMIN', 'USER'] as const).entries()) {
@@ -31,7 +30,7 @@ const test = base.extend<{ data: Fixture }>({
             contexts.push(await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } }));
         }
         try {
-            await use({ admin: contexts[0], assistant: contexts[1], learner: contexts[2], users, groupId: group.id, venueId: venue.id, layoutId: layout.id, courseId: course.id, sessionId: session.id, seats: layout.seats, input, tokens });
+            await use({ admin: contexts[0], assistant: contexts[1], learner: contexts[2], users, groupId: group.id, venueId: venue.id, layoutId: layout.id, sessionId: session.id, seats: layout.seats, input, tokens });
         } finally {
             await Promise.all(contexts.map(c => c.dispose()));
             const userIds = (await db.user.findMany({ where: { groupId: group.id } })).map(u => u.id);
@@ -41,7 +40,6 @@ const test = base.extend<{ data: Fixture }>({
             await db.reservation.deleteMany({ where: { sessionId: { in: sessionIds } } });
             await db.assistantCoverage.deleteMany({ where: { sessionId: { in: sessionIds } } });
             await db.session.deleteMany({ where: { id: { in: sessionIds } } });
-            await db.course.delete({ where: { id: course.id } });
             await db.layoutVersion.deleteMany({ where: { id: { in: layoutIds } } });
             await db.venue.delete({ where: { id: venue.id } });
             await db.user.deleteMany({ where: { id: { in: userIds } } });
@@ -144,7 +142,7 @@ test('有预约场次锁定、关闭重开、管理员取消与失败事务日�
     const otherLayout = await db.layoutVersion.create({ data: { name: '另一个布局', venueId: data.venueId, status: 'PUBLISHED' } });
     for (const patch of [
         { startsAt: new Date(Date.parse(data.input.startsAt) + 60000).toISOString() },
-        { courseId: 'seed-course-1' },
+        { requiredAssistants: 0 },
         { layoutId: otherLayout.id },
         { requiredAssistants: 2 },
     ]) expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, ...patch } })).status()).toBe(400);
@@ -246,7 +244,7 @@ test('布局输入拒绝重复编号、非法关联、尺寸和旋转越界', as
     expect((await data.admin.put(`/api/groups/${data.groupId}`, { data: invalid })).status()).toBe(400);
 });
 
-test('后台表单：用户、分组规则、课程、场次、预约取消和日志', async ({ data, page, baseURL }, testInfo) => {
+test('后台表单：用户、分组规则、场次、预约取消和日志', async ({ data, page, baseURL }, testInfo) => {
     await page.context().addCookies([{ name: 'station_session', value: data.tokens[0], url: baseURL! }]);
     await page.goto('/admin/users');
     await page.getByLabel('搜索用户').fill(data.users[2].email);
@@ -263,12 +261,6 @@ test('后台表单：用户、分组规则、课程、场次、预约取消和�
     await page.getByRole('button', { name: '保存分组权限' }).click();
     await expect(page.getByRole('status')).toContainText('分组权限已保存');
     expect(await db.groupDateRule.count({ where: { groupId: data.groupId, date: '2027-01-01' } })).toBe(1);
-    await page.goto('/admin/courses');
-    const course = await db.course.findUniqueOrThrow({ where: { id: data.courseId } });
-    await page.locator('.record-card').filter({ hasText: course.name }).getByRole('button', { name: '编辑课程' }).click();
-    await page.getByLabel('指导教师').fill('表单验收老师');
-    await page.getByRole('button', { name: '保存课程' }).click();
-    await expect(page.getByRole('status')).toContainText('课程已保存');
     await page.goto('/admin/sessions');
     await page.getByRole('button', { name: '新增预约时段', exact: true }).click();
     await page.getByRole('combobox', { name: /^已发布布局/ }).selectOption(data.layoutId);

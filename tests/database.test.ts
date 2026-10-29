@@ -43,7 +43,7 @@ test('空 schema 迁移、实际索引、模型一致性与重复初始化保留
         const group = await db.group.create({ data: { name: '保留的默认分组' } });
         await db.appSetting.update({ where: { id: 'main' }, data: { defaultGroupId: group.id } });
         await db.layoutVersion.update({ where: { id: 'seed-layout' }, data: { name: '保留的布局' } });
-        const session = await db.session.create({ data: { id: 'preserved-session', courseId: 'seed-course-1', layoutId: 'seed-layout', startsAt: new Date('2030-01-01T10:00:00+08:00'), endsAt: new Date('2030-01-01T11:00:00+08:00') } });
+        const session = await db.session.create({ data: { id: 'preserved-session', layoutId: 'seed-layout', startsAt: new Date('2030-01-01T10:00:00+08:00'), endsAt: new Date('2030-01-01T11:00:00+08:00') } });
         await db.session.update({ where: { id: session.id }, data: { open: false } });
         await db.assistantCoverage.deleteMany({});
         await db.user.update({ where: { id: 'seed-assistant' }, data: { role: 'USER', enabled: false } });
