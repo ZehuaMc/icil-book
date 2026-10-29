@@ -6,7 +6,7 @@ import { hash } from 'bcryptjs';
 const db = new PrismaClient();
 type Fixture = {
     admin: APIRequestContext; assistant: APIRequestContext; learner: APIRequestContext;
-    users: { id: string; email: string; name: string; role: string; groupId: string; enabled: boolean }[];
+    users: { id: string; studentId: string; email: string; name: string; role: string; groupId: string; enabled: boolean }[];
     groupId: string; venueId: string; layoutId: string; courseId: string; sessionId: string;
     seats: { id: string; code: string }[]; tokens: string[];
     input: { courseId: string; layoutId: string; startsAt: string; endsAt: string; requiredAssistants: number; open: boolean };
@@ -16,15 +16,15 @@ const test = base.extend<{ data: Fixture }>({
         const prefix = `accept-${randomUUID()}`;
         const group = await db.group.create({ data: { name: prefix, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
         const venue = await db.venue.create({ data: { name: prefix, location: '验收场地' } });
-        const layout = await db.layoutVersion.create({ data: { name: prefix, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'T01', x: 100, y: 100 }, { code: 'T02', x: 200, y: 100 }] } }, include: { seats: true } });
+        const layout = await db.layoutVersion.create({ data: { name: prefix, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'T01', x: 100, y: 100 }, { code: 'T02', x: 200, y: 100 }, { code: 'STAFF', x: 300, y: 100, fixedForAssistant: true }] } }, include: { seats: true } });
         const course = await db.course.create({ data: { name: `${prefix}课程`, instructor: '验收教师' } });
-        const startsAt = new Date(Date.now() + 60 * 86400000).toISOString();
+        const startsAt = new Date(Math.ceil(Date.now() / 60000) * 60000 + 3600000).toISOString();
         const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
         const input = { courseId: course.id, layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: true };
         const session = await db.session.create({ data: input });
         const users = [], contexts: APIRequestContext[] = [], tokens: string[] = [];
-        for (const [i, role] of (['ADMIN', 'ASSISTANT', 'USER'] as const).entries()) {
-            const user = await db.user.create({ data: { name: `验收用户${i}`, email: `${prefix}-${i}@example.test`, role, groupId: group.id, passwordHash: 'unused' } });
+        for (const [i, role] of (['ADMIN', 'ADMIN', 'USER'] as const).entries()) {
+            const user = await db.user.create({ data: { name: `验收用户${i}`, studentId: `${prefix.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}${i}`, email: `${prefix}-${i}@example.test`, role, groupId: group.id, passwordHash: 'unused' } });
             users.push(user);
             const token = randomBytes(32).toString('hex'); tokens.push(token);
             await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: user.id, expiresAt: new Date(Date.now() + 3600000) } });
@@ -51,6 +51,8 @@ const test = base.extend<{ data: Fixture }>({
 });
 const userInput = (u: Fixture['users'][number], patch: object = {}) => ({ name: u.name, role: u.role, groupId: u.groupId, enabled: u.enabled, ...patch });
 async function cover(data: Fixture) {
+    const staff = await data.admin.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats.find(s => s.code === 'STAFF')!.id } });
+    expect(staff.ok(), await staff.text()).toBeTruthy();
     const response = await data.assistant.post('/api/reservations/coverage', { data: { sessionId: data.sessionId } });
     expect(response.ok(), await response.text()).toBeTruthy();
     return (await response.json()).coverage.id as string;
@@ -69,7 +71,8 @@ test('并发创建重叠场次只成功一个，相邻时段允许', async ({ da
 });
 
 test('最后管理员保护：两名管理员同时降级或禁用仍保留一名', async ({ data, playwright, baseURL }) => {
-    const other = await db.user.create({ data: { name: '第二管理员', email: `admin-${randomUUID()}@example.test`, groupId: data.groupId, role: 'ADMIN', passwordHash: 'unused' } });
+    const otherId = randomUUID();
+    const other = await db.user.create({ data: { name: '第二管理员', studentId: otherId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24), email: `admin-${otherId}@example.test`, groupId: data.groupId, role: 'ADMIN', passwordHash: 'unused' } });
     const token = randomBytes(32).toString('hex');
     await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: other.id, expiresAt: new Date(Date.now() + 3600000) } });
     const context = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } });
@@ -95,7 +98,7 @@ test('最后管理员保护：两名管理员同时降级或禁用仍保留一�
 test('助教登记与降级/停用竞争不产生无效保障', async ({ data, playwright, baseURL }) => {
     for (const patch of [{ enabled: false }, { role: 'USER' }]) {
         await db.assistantCoverage.deleteMany({ where: { sessionId: data.sessionId } });
-        await db.user.update({ where: { id: data.users[1].id }, data: { role: 'ASSISTANT', enabled: true } });
+        await db.user.update({ where: { id: data.users[1].id }, data: { role: 'ADMIN', enabled: true } });
         const token = randomBytes(32).toString('hex');
         await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: data.users[1].id, expiresAt: new Date(Date.now() + 3600000) } });
         const assistant = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } });
@@ -108,7 +111,7 @@ test('助教登记与降级/停用竞争不产生无效保障', async ({ data, p
         expect(results.every(r => r.status() < 500)).toBeTruthy();
         const user = await db.user.findUniqueOrThrow({ where: { id: data.users[1].id } });
         const count = await db.assistantCoverage.count({ where: { assistantId: user.id } });
-        expect(count === 0 || (user.enabled && user.role === 'ASSISTANT')).toBeTruthy();
+        expect(count === 0 || (user.enabled && user.role === 'ADMIN')).toBeTruthy();
     }
 });
 
@@ -131,7 +134,7 @@ test('保存与发布竞争、复制版本后编辑保持旧场次布局稳定',
     expect(seats.every(s => data.seats.every(old => old.id !== s.id))).toBeTruthy();
     expect((await data.admin.put(`/api/layouts/${cloneId}`, { data: { name: '新版本已编辑', width: 1000, height: 660, elements: [], seats: seats.map(s => ({ ...s, code: `NEW-${s.code}` })) } })).ok()).toBeTruthy();
     expect((await db.session.findUniqueOrThrow({ where: { id: data.sessionId } })).layoutId).toBe(data.layoutId);
-    expect((await db.seat.findMany({ where: { layoutId: data.layoutId }, orderBy: { code: 'asc' } })).map(s => s.code)).toEqual(['T01', 'T02']);
+    expect((await db.seat.findMany({ where: { layoutId: data.layoutId }, orderBy: { code: 'asc' } })).map(s => s.code)).toEqual(['STAFF', 'T01', 'T02']);
 });
 
 test('有预约场次锁定、关闭重开、管理员取消与失败事务日志', async ({ data }) => {
@@ -150,7 +153,7 @@ test('有预约场次锁定、关闭重开、管理员取消与失败事务日�
     expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, open: false } })).ok()).toBeTruthy();
     expect((await data.admin.delete(`/api/reservations/${reservationId}`)).ok()).toBeTruthy();
     expect((await db.reservation.findUniqueOrThrow({ where: { id: reservationId } })).cancelledAt).toBeTruthy();
-    expect((await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } })).status()).toBe(400);
+    expect((await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } })).status()).toBe(403);
     expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: data.input })).ok()).toBeTruthy();
     expect((await data.admin.delete(`/api/reservations/coverage/${coverageId}`)).ok()).toBeTruthy();
     expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, startsAt: new Date(Date.parse(data.input.startsAt) + 60000).toISOString() } })).status()).toBe(400);
@@ -181,7 +184,7 @@ test('CSV 筛选、BOM、中文、引号换行及公式前缀转义', async ({ d
     expect([...buffer.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
     const csv = buffer.toString('utf8');
     expect(csv).toContain('"\'=SUM(1,2)""\n中文"');
-    expect(csv).toContain(data.users[2].email);
+    expect(csv).toContain(data.users[2].studentId);
     expect(csv).toContain('"T01","已预约"');
     await expect((await data.admin.get('/api/admin/reservations?sessionId=missing&export=csv')).body().then(b => b.toString().trim().split('\r\n').length)).resolves.toBe(1);
     await data.admin.delete(`/api/reservations/${reservationId}`);
@@ -194,9 +197,9 @@ test('真实 Cookie、会话过期/撤销、15 次限流与窗口重置', async 
     const password = 'Acceptance-Password-2026!';
     await db.user.update({ where: { id: user.id }, data: { passwordHash: await hash(password, 4) } });
     const client = await playwright.request.newContext({ baseURL });
-    const key = `auth/login:${createHash('sha256').update(user.email).digest('hex')}`;
+    const key = `auth/login:USER:${createHash('sha256').update(user.studentId).digest('hex')}`;
     try {
-        const login = await client.post('/api/auth/login', { data: { email: user.email, password } });
+        const login = await client.post('/api/auth/login', { data: { studentId: user.studentId, password } });
         expect(login.ok()).toBeTruthy();
         const cookie = (await client.storageState()).cookies.find(c => c.name === 'station_session')!;
         expect(cookie.httpOnly).toBe(true); expect(cookie.sameSite).toBe('Lax'); expect(cookie.secure).toBe(false);
@@ -205,14 +208,14 @@ test('真实 Cookie、会话过期/撤销、15 次限流与窗口重置', async 
         expect(await db.authSession.findUnique({ where: { id: cookie.value } })).toBeNull();
         await db.authSession.update({ where: { id: tokenId }, data: { expiresAt: new Date(Date.now() - 1000) } });
         expect((await client.get('/api/reservations')).status()).toBe(401);
-        expect((await client.post('/api/auth/login', { data: { email: user.email, password } })).ok()).toBeTruthy();
+        expect((await client.post('/api/auth/login', { data: { studentId: user.studentId, password } })).ok()).toBeTruthy();
         expect((await client.post('/api/auth/logout')).ok()).toBeTruthy();
         expect((await client.get('/api/reservations')).status()).toBe(401);
         await db.loginAttempt.delete({ where: { key } });
-        for (let i = 0; i < 15; i++) expect((await client.post('/api/auth/login', { data: { email: user.email, password: 'wrong' } })).status()).toBe(401);
-        expect((await client.post('/api/auth/login', { data: { email: user.email, password } })).status()).toBe(429);
+        for (let i = 0; i < 15; i++) expect((await client.post('/api/auth/login', { data: { studentId: user.studentId, password: 'wrong' } })).status()).toBe(401);
+        expect((await client.post('/api/auth/login', { data: { studentId: user.studentId, password } })).status()).toBe(429);
         await db.loginAttempt.update({ where: { key }, data: { resetAt: new Date(Date.now() - 1000) } });
-        expect((await client.post('/api/auth/login', { data: { email: user.email, password } })).ok()).toBeTruthy();
+        expect((await client.post('/api/auth/login', { data: { studentId: user.studentId, password } })).ok()).toBeTruthy();
         expect((await db.loginAttempt.findUniqueOrThrow({ where: { key } })).count).toBe(1);
         expect((await data.admin.patch(`/api/admin/users/${user.id}`, { data: userInput(user, { enabled: false }) })).ok()).toBeTruthy();
         expect(await db.authSession.count({ where: { userId: user.id } })).toBe(0);
@@ -267,25 +270,29 @@ test('后台表单：用户、分组规则、课程、场次、预约取消和�
     await page.getByRole('button', { name: '保存课程' }).click();
     await expect(page.getByRole('status')).toContainText('课程已保存');
     await page.goto('/admin/sessions');
-    await page.getByRole('button', { name: '创建场次', exact: true }).click();
-    await page.getByRole('combobox', { name: /^课程/ }).selectOption(data.courseId);
+    await page.getByRole('button', { name: '新增预约时段', exact: true }).click();
     await page.getByRole('combobox', { name: /^已发布布局/ }).selectOption(data.layoutId);
-    const localInput = (value: number) => new Date(value + 8 * 3600000).toISOString().slice(0, 16);
-    await page.getByLabel('开始时间（北京时间）').fill(localInput(Date.parse(data.input.endsAt) + 3600000));
-    await page.getByLabel('结束时间（北京时间）').fill(localInput(Date.parse(data.input.endsAt) + 7200000));
-    await page.getByRole('button', { name: '保存场次' }).click();
-    await expect(page.getByRole('status')).toContainText('场次已保存');
+    const localParts = (value: number) => {
+        const d = new Date(value + 8 * 3600000);
+        return { date: d.toISOString().slice(0, 10), time: d.toISOString().slice(11, 16) };
+    };
+    const start = localParts(Date.parse(data.input.endsAt) + 3600000);
+    const end = localParts(Date.parse(data.input.endsAt) + 7200000);
+    await page.getByLabel('日期', { exact: true }).fill(start.date);
+    await page.getByRole('combobox', { name: /^开始时间/ }).selectOption(start.time);
+    await page.getByLabel('结束日期', { exact: true }).fill(end.date);
+    await page.getByRole('combobox', { name: /^结束时间/ }).selectOption(end.time);
+    await page.getByRole('button', { name: '保存预约时段' }).click();
+    await expect(page.getByRole('status')).toContainText('预约时段已创建');
     expect(await db.session.count({ where: { layoutId: data.layoutId } })).toBe(2);
     await cover(data); await book(data);
     await page.goto('/admin/reservations');
-    await page.getByLabel('筛选场次').selectOption(data.sessionId);
-    await expect(page.locator('table').first()).toContainText(data.users[2].email);
+    await page.getByLabel('筛选预约时段').selectOption(data.sessionId);
+    await expect(page.locator('table').first()).toContainText(data.users[2].studentId);
     page.once('dialog', d => d.accept());
-    await page.getByRole('button', { name: '取消预约', exact: true }).click();
+    await page.getByRole('row', { name: new RegExp(data.users[2].studentId) }).getByRole('button', { name: '取消预约', exact: true }).click();
     await expect(page.getByRole('status')).toContainText('预约已取消');
-    page.once('dialog', d => d.accept());
-    await page.getByRole('button', { name: '取消保障', exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('保障已取消');
+    expect((await page.request.delete(`/api/reservations/coverage/${(await db.assistantCoverage.findFirstOrThrow({ where: { sessionId: data.sessionId } })).id}`)).ok()).toBeTruthy();
     await page.goto('/admin/logs');
     await expect(page.locator('table')).toContainText('取消助教保障');
     await page.screenshot({ path: testInfo.outputPath('admin-logs.png'), fullPage: true });
@@ -323,13 +330,14 @@ test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点',
         await page.screenshot({ path: testInfo.outputPath('mobile-booking.png'), fullPage: true });
         await testInfo.attach('mobile-booking', { path: testInfo.outputPath('mobile-booking.png'), contentType: 'image/png' });
         await page.getByRole('button', { name: '退出登录', exact: true }).tap();
-        await expect(page.getByRole('link', { name: '登录', exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { name: '先选择你的入口。' })).toBeVisible();
     } finally { await context.close(); }
 });
 
 test('两个浏览器抢座刷新，失败可重试，取消后座位释放', async ({ data, browser, baseURL }) => {
     await cover(data);
-    const other = await db.user.create({ data: { name: '另一学员', email: `${randomUUID()}@example.test`, passwordHash: 'unused', groupId: data.groupId } });
+    const otherId = randomUUID();
+    const other = await db.user.create({ data: { name: '另一学员', studentId: otherId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24), email: `${otherId}@example.test`, passwordHash: 'unused', groupId: data.groupId } });
     const token = randomBytes(32).toString('hex');
     await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: other.id, expiresAt: new Date(Date.now() + 3600000) } });
     const a = await browser.newContext({ baseURL }), b = await browser.newContext({ baseURL });
@@ -347,9 +355,9 @@ test('两个浏览器抢座刷新，失败可重试，取消后座位释放', as
         await first.getByRole('button', { name: '确认，预约这个工位' }).click();
         await expect(first.getByRole('status')).toContainText('预约成功');
         await second.getByRole('button', { name: '确认，预约这个工位' }).click();
-        await expect(second.getByRole('status')).toContainText('刚刚被预约');
+        await expect(second.getByRole('status')).toContainText('刚被预约');
         await expect(second.getByRole('button', { name: '座位 T01，已预约', exact: true })).toBeVisible();
-        await first.getByRole('link', { name: '查看我的预约' }).click();
+        await first.getByRole('main').getByRole('link', { name: '我的预约', exact: true }).click();
         first.once('dialog', d => d.accept());
         await first.locator('.record-card').filter({ hasText: 'T01' }).getByRole('button', { name: '取消预约' }).click();
         await expect(first.getByRole('status')).toContainText('预约已取消');

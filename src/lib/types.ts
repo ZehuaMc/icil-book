@@ -20,9 +20,12 @@ export type Group = {
 export type User = {
     id: string;
     name: string;
+    studentId: string;
     email: string;
     role: 'USER' | 'ADMIN' | 'ASSISTANT';
+    memberType: 'YSYX' | 'ICIL';
     enabled: boolean;
+    deletedAt?: string | null;
     groupId: string;
     group: Group;
 };
@@ -38,11 +41,13 @@ export type Element = {
 };
 export type Seat = {
     id: string;
+    originId?: string | null;
     code: string;
     x: number;
     y: number;
     rotation: number;
     enabled: boolean;
+    fixedForAssistant: boolean;
     elementId?: string | null;
 };
 export type Venue = {
@@ -52,6 +57,7 @@ export type Venue = {
 };
 export type Layout = {
     id: string;
+    sourceLayoutId?: string | null;
     name: string;
     venueId: string;
     venue: Venue;
@@ -61,23 +67,27 @@ export type Layout = {
     elements: Element[];
     seats: Seat[];
 };
-export type Course = {
-    id: string;
-    name: string;
-    instructor: string;
-    description: string;
-};
 export type Session = {
     id: string;
-    courseId: string;
-    course: Course;
     layoutId: string;
     layout: Layout;
     startsAt: string;
     endsAt: string;
     requiredAssistants: number;
     open: boolean;
+    icilOnly?: boolean;
+    cancelledAt?: string | null;
     allowed: boolean;
+    adminReady: boolean;
+    hasAdminSeat?: boolean;
+    assistantPresent?: boolean;
+    staffPresenceWindows?: { startsAt: string; endsAt: string }[];
+    bookingBlocked?: boolean;
+    bookingBlocks?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string }[];
+    bookingBlock?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string } | null;
+    sessionBlocked?: boolean;
+    dayBlocked?: boolean;
+    adminBookings: { id: string; adminId: string; admin: { id: string; name: string } }[];
     coverage: {
         id: string;
         assistantId: string;
@@ -91,6 +101,9 @@ export type Session = {
         seatId: string;
         mine?: boolean;
         userId?: string;
+        startsAt?: string;
+        endsAt?: string;
+        checkedInAt?: string | null;
     }[];
 };
 export type Reservation = {
@@ -98,8 +111,11 @@ export type Reservation = {
     sessionId: string;
     session: Session;
     seat: Seat;
+    startsAt: string;
+    endsAt: string;
     user: User;
     cancelledAt: string | null;
+    checkedInAt: string | null;
     createdAt: string;
 };
 export type Coverage = {
@@ -110,10 +126,45 @@ export type Coverage = {
         email: string;
     };
 };
+export type UserNotification = {
+    id: string;
+    type: string;
+    message: string;
+    readAt: string | null;
+    createdAt: string;
+};
 export async function api<T = Record<string, unknown>>(path: string, method = 'GET', data?: unknown): Promise<T> {
     const res = await fetch(`/api/${path}`, { method, headers: data ? { 'Content-Type': 'application/json' } : undefined, body: data ? JSON.stringify(data) : undefined, cache: 'no-store' });
     const json = await res.json();
     if (!res.ok)
         throw new Error(json.error ?? '请求失败');
     return json;
+}
+const LAYOUT_UPDATED_EVENT = 'station:layout-updated';
+const LAYOUT_UPDATED_STORAGE_KEY = 'station-layout-updated';
+export function announceLayoutUpdate() {
+    if (typeof window === 'undefined')
+        return;
+    const timestamp = String(Date.now());
+    window.dispatchEvent(new Event(LAYOUT_UPDATED_EVENT));
+    try {
+        window.localStorage.setItem(LAYOUT_UPDATED_STORAGE_KEY, timestamp);
+    }
+    catch {
+        // Same-tab listeners still receive the custom event when storage is unavailable.
+    }
+}
+export function subscribeToLayoutUpdates(listener: () => void) {
+    if (typeof window === 'undefined')
+        return () => {};
+    const onStorage = (event: StorageEvent) => {
+        if (event.key === LAYOUT_UPDATED_STORAGE_KEY)
+            listener();
+    };
+    window.addEventListener(LAYOUT_UPDATED_EVENT, listener);
+    window.addEventListener('storage', onStorage);
+    return () => {
+        window.removeEventListener(LAYOUT_UPDATED_EVENT, listener);
+        window.removeEventListener('storage', onStorage);
+    };
 }

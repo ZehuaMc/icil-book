@@ -12,9 +12,16 @@ export async function serial<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
             return await db.$transaction(fn, { isolationLevel: 'Serializable', timeout: 15000 });
         }
         catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034' && attempt < 4)
+            const serializationFailure = error instanceof Prisma.PrismaClientKnownRequestError
+                && (error.code === 'P2034' || (error.code === 'P2010' && typeof error.meta?.code === 'string' && error.meta.code === '40001'));
+            if (serializationFailure && attempt < 4)
                 continue;
             throw error;
         }
     }
+}
+
+/** Serialize mutations that protect a process-wide invariant. */
+export async function lockInvariant(tx: Tx, name: string) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${name}))`;
 }

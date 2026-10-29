@@ -30,6 +30,10 @@ test('存在日期规则时，不回退到每周规则', () => {
     const special = { ...group, dateRules: [{ date: '2026-10-19', allowed: true, startMinute: 840, endMinute: 1020 }] };
     assert.equal(groupAllows(special, start, end), false);
 });
+test('全天默认分组允许管理员开放的晚间时段跨过 22:00', () => {
+    const allDay = { ...group, weeklyRules: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) };
+    assert.equal(groupAllows(allDay, '2026-10-19T13:08:00Z', '2026-10-19T14:07:00Z'), true);
+});
 test('日期禁止窗口与课程相交时优先拒绝', () => {
     const special = { ...group, dateRules: [{ date: '2026-10-19', allowed: true, startMinute: 0, endMinute: 1440 }, { date: '2026-10-19', allowed: false, startMinute: 660, endMinute: 720 }] };
     assert.equal(groupAllows(special, start, end), false);
