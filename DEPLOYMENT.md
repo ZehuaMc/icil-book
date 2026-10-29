@@ -2,12 +2,13 @@
 
 ## 本机 Docker 运行
 
-应用、迁移与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目和持久数据卷；不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`。
+应用、迁移与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目；PostgreSQL 数据保存到 `.env.deploy` 中 `DB_DATA_DIR` 指定的宿主机目录（默认 `./data/postgres`），不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`。
 
 ```bash
 cp .env.deploy.example .env.deploy
 chmod 600 .env.deploy
 # 编辑 DB_PASSWORD（建议随机十六进制）、SEED_PASSWORD 和 APP_ORIGIN
+# DB_DATA_DIR 可改为绝对路径，例如 /srv/icil-book/postgres-data
 # 本机 HTTP：APP_ORIGIN=http://localhost:3100，COOKIE_SECURE=false
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build --wait
 # 首次体验时手动初始化示例账号，正常重启不会自动 seed
@@ -22,7 +23,7 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migr
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml ps
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml logs --tail=100 app
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml restart app
-# 停止服务，保留数据库卷
+# 停止服务，保留宿主机数据库目录
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml down
 ```
 

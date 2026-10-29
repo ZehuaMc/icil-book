@@ -13,3 +13,4 @@ playwright-report/
 *.tsbuildinfo
 .env.deploy
 backups/
+data/

@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.deploy}
       POSTGRES_DB: station
     volumes:
-      - deploy_data:/var/lib/postgresql/data
+      - ${DB_DATA_DIR:-./data/postgres}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U station -d station"]
       interval: 3s
@@ -43,5 +43,3 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
-volumes:
-  deploy_data:
