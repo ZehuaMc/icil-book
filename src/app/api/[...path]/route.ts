@@ -16,10 +16,6 @@ const sessionInclude = { layout: { include: { venue: true, elements: true, seats
 const recordInclude = { session: { include: { layout: { include: { venue: true } } } }, seat: true, user: { select: { id: true, name: true, studentId: true, email: true, role: true } } } as const;
 const ADMIN_REGISTRATION_KEY = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
 type SessionView = Prisma.SessionGetPayload<{ include: typeof sessionInclude }>;
-function withoutLegacyCourse<T extends { courseId?: unknown }>(value: T) {
-    const { courseId: _courseId, ...rest } = value;
-    return rest;
-}
 function sessionsOverlap(a: SessionView, b: SessionView) {
     return a.layout.venueId === b.layout.venueId && a.startsAt < b.endsAt && a.endsAt > b.startsAt;
 }
@@ -282,7 +278,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         return { sessions: mergedSessions.map(s => {
             const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt);
             const fullSessionBlock = matchingBlocks.some(block => block.kind === 'DAY' || (block.startsAt <= s.startsAt && block.endsAt >= s.endsAt));
-            return { ...withoutLegacyCourse(s), adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
+            return { ...s, adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
         }) };
     }
     const user = await requireUser();
@@ -750,7 +746,7 @@ async function dispatch(req: NextRequest, path: string[]) {
             db.session.findMany({ where: { icilOnly: false }, include: sessionInclude, orderBy: { startsAt: 'desc' }, take: 500 }),
             db.bookingBlock.findMany({ where: { active: true }, orderBy: { startsAt: 'asc' } }),
         ]);
-        return { sessions: sessions.map(s => { const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt); return { ...withoutLegacyCourse(s), adminReady: s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY') }; }) };
+        return { sessions: sessions.map(s => { const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt); return { ...s, adminReady: s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY') }; }) };
     }
     if ((key === 'sessions' && method === 'POST') || (path[0] === 'sessions' && path.length === 2 && method === 'PUT')) {
         const data = sessionSchema.parse(await body(req));
@@ -783,7 +779,7 @@ async function dispatch(req: NextRequest, path: string[]) {
             const values = { layoutId: data.layoutId, requiredAssistants: data.requiredAssistants, open: data.open, startsAt: new Date(data.startsAt), endsAt: new Date(data.endsAt) };
             const session = path[1] ? await tx.session.update({ where: { id: path[1] }, data: values }) : await tx.session.create({ data: values });
             await audit(tx, user.id, 'SESSION_SAVE', session.id, data);
-            return { session: withoutLegacyCourse(session) };
+            return { session };
         });
     }
     if (key === 'admin/reservations' && method === 'GET') {

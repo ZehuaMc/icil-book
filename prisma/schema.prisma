@@ -158,19 +158,8 @@ model Seat {
   @@unique([layoutId, code])
 }
 
-model Course {
-  id          String    @id @default(cuid())
-  name        String
-  description String    @default("")
-  instructor  String
-  sessions    Session[]
-}
-
 model Session {
   id                 String                @id @default(cuid())
-  // Legacy compatibility only. Study-room sessions have no course.
-  courseId           String?
-  course             Course?               @relation(fields: [courseId], references: [id])
   layoutId           String
   layout             LayoutVersion         @relation(fields: [layoutId], references: [id])
   startsAt           DateTime              @db.Timestamptz(3)

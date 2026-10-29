@@ -18,7 +18,7 @@ try {
     assert.equal(cookie.sameSite, 'Lax');
     assert.equal(cookie.secure, secure);
     assert.equal((await page.request.get('/api/health')).status(), 200);
-    assert.equal((await page.request.post('/api/admin/courses', { headers: { Origin: 'https://untrusted.example' }, data: { name: '不应创建', instructor: '不应创建' } })).status(), 403);
+    assert.equal((await page.request.post('/api/sessions', { headers: { Origin: 'https://untrusted.example' }, data: {} })).status(), 403);
     await page.goto('/admin');
     await page.getByRole('heading', { name: /空间管理概览/ }).waitFor();
     await mkdir('reports', { recursive: true });

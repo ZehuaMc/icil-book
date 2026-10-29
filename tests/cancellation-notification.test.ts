@@ -26,9 +26,8 @@ test('最后一名管理员取消工位时关闭时段、取消学员预约并�
         data: { name: prefix, venueId: venue.id, status: 'PUBLISHED', seats: { create: ['A01', 'A02', 'A03', 'B01', 'B02', 'B03'].map((code, i) => ({ code, x: i * 50, y: 0 })) } },
         include: { seats: true },
     });
-    const course = await db.course.create({ data: { name: prefix, instructor: 'test' } });
     const sessions = await Promise.all([1, 2].map(day => db.session.create({
-        data: { courseId: course.id, layoutId: layout.id, startsAt: new Date(Date.now() + day * 86400000), endsAt: new Date(Date.now() + day * 86400000 + 3600000), open: true },
+        data: { layoutId: layout.id, startsAt: new Date(Date.now() + day * 86400000), endsAt: new Date(Date.now() + day * 86400000 + 3600000), open: true },
     })));
     const [first, second] = sessions;
     const [a01, a02, a03, b01, b02, b03] = layout.seats;
@@ -69,7 +68,6 @@ test('最后一名管理员取消工位时关闭时段、取消学员预约并�
         await db.auditLog.deleteMany({ where: { actorId: { in: users.map(user => user.id) } } });
         await db.reservation.deleteMany({ where: { sessionId: { in: sessions.map(session => session.id) } } });
         await db.session.deleteMany({ where: { id: { in: sessions.map(session => session.id) } } });
-        await db.course.delete({ where: { id: course.id } });
         await db.layoutVersion.delete({ where: { id: layout.id } });
         await db.venue.delete({ where: { id: venue.id } });
         await db.user.deleteMany({ where: { id: { in: users.map(user => user.id) } } });
