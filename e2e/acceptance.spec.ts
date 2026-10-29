@@ -22,7 +22,7 @@ const test = base.extend<{ data: Fixture }>({
         const input = { layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: true };
         const session = await db.session.create({ data: input });
         const users = [], contexts: APIRequestContext[] = [], tokens: string[] = [];
-        for (const [i, role] of (['ADMIN', 'ADMIN', 'USER'] as const).entries()) {
+        for (const [i, role] of (['ADMIN', 'ASSISTANT', 'USER'] as const).entries()) {
             const user = await db.user.create({ data: { name: `验收用户${i}`, studentId: `${prefix.replace(/[^a-zA-Z0-9]/g, '').slice(0, 24)}${i}`, email: `${prefix}-${i}@example.test`, role, groupId: group.id, passwordHash: 'unused' } });
             users.push(user);
             const token = randomBytes(32).toString('hex'); tokens.push(token);
@@ -96,7 +96,7 @@ test('最后管理员保护：两名管理员同时降级或禁用仍保留一�
 test('助教登记与降级/停用竞争不产生无效保障', async ({ data, playwright, baseURL }) => {
     for (const patch of [{ enabled: false }, { role: 'USER' }]) {
         await db.assistantCoverage.deleteMany({ where: { sessionId: data.sessionId } });
-        await db.user.update({ where: { id: data.users[1].id }, data: { role: 'ADMIN', enabled: true } });
+        await db.user.update({ where: { id: data.users[1].id }, data: { role: 'ASSISTANT', enabled: true } });
         const token = randomBytes(32).toString('hex');
         await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: data.users[1].id, expiresAt: new Date(Date.now() + 3600000) } });
         const assistant = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } });
@@ -109,7 +109,7 @@ test('助教登记与降级/停用竞争不产生无效保障', async ({ data, p
         expect(results.every(r => r.status() < 500)).toBeTruthy();
         const user = await db.user.findUniqueOrThrow({ where: { id: data.users[1].id } });
         const count = await db.assistantCoverage.count({ where: { assistantId: user.id } });
-        expect(count === 0 || (user.enabled && user.role === 'ADMIN')).toBeTruthy();
+        expect(count === 0 || (user.enabled && user.role === 'ASSISTANT')).toBeTruthy();
     }
 });
 

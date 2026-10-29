@@ -20,7 +20,10 @@ services:
     command: ["npm", "run", "db:migrate"]
     environment:
       DATABASE_URL: postgresql://station:${DB_PASSWORD:?Set DB_PASSWORD}@postgres:5432/station?schema=public
-      SEED_PASSWORD: ${SEED_PASSWORD:?Set SEED_PASSWORD}
+      ADMIN_STUDENT_ID: ${ADMIN_STUDENT_ID:?Set ADMIN_STUDENT_ID}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME:-空间管理员}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
     depends_on:
       postgres:
         condition: service_healthy

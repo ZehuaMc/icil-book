@@ -6,7 +6,7 @@ import { cancelReservation, reserveSeat } from '../src/lib/bookings';
 
 assert.ok(process.env.DATABASE_URL, 'DATABASE_URL 未设置：需要迁移后的 PostgreSQL 测试库');
 
-test('最后一名管理员取消工位时关闭时段、取消学员预约并创建通知', async () => {
+test('最后一名助教取消工位时关闭时段、取消学员预约并创建通知', async () => {
     const prefix = `coverage-${randomUUID()}`;
     const group = await db.group.create({
         data: {
@@ -16,8 +16,8 @@ test('最后一名管理员取消工位时关闭时段、取消学员预约并�
         },
     });
     const users = await Promise.all([
-        db.user.create({ data: { name: '管理员甲', studentId: `${prefix}a`, email: `${prefix}-a@test.local`, role: 'ADMIN', groupId: group.id, passwordHash: 'unused' } }),
-        db.user.create({ data: { name: '管理员乙', studentId: `${prefix}b`, email: `${prefix}-b@test.local`, role: 'ADMIN', groupId: group.id, passwordHash: 'unused' } }),
+        db.user.create({ data: { name: '助教甲', studentId: `${prefix}a`, email: `${prefix}-a@test.local`, role: 'ASSISTANT', groupId: group.id, passwordHash: 'unused' } }),
+        db.user.create({ data: { name: '助教乙', studentId: `${prefix}b`, email: `${prefix}-b@test.local`, role: 'ASSISTANT', groupId: group.id, passwordHash: 'unused' } }),
         db.user.create({ data: { name: '预约学员', studentId: `${prefix}u`, email: `${prefix}-u@test.local`, role: 'USER', groupId: group.id, passwordHash: 'unused' } }),
     ]);
     const [adminA, adminB, learner] = users;

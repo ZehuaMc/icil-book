@@ -3,13 +3,13 @@ import { PrismaClient } from '@prisma/client';
 import { randomUUID, createHash } from 'node:crypto';
 
 const db = new PrismaClient();
-const password = process.env.SEED_PASSWORD ?? '';
-const adminKey = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
+const adminStudentId = process.env.ADMIN_STUDENT_ID ?? 'admin001';
+const adminPassword = process.env.ADMIN_PASSWORD ?? '';
 test.beforeAll(async () => {
-    await db.loginAttempt.deleteMany({ where: { key: `auth/login:ADMIN:${createHash('sha256').update('admin001').digest('hex')}` } });
+    await db.loginAttempt.deleteMany({ where: { key: `auth/login:ADMIN:${createHash('sha256').update(adminStudentId).digest('hex')}` } });
 });
 
-async function loginStudent(page: Page, studentId = 'student001', studentPassword = password) {
+async function loginStudent(page: Page, studentId: string, studentPassword: string) {
     await page.goto('/login?mode=student');
     await page.getByLabel('学号').fill(studentId);
     await page.getByLabel('密码').fill(studentPassword);
@@ -17,10 +17,10 @@ async function loginStudent(page: Page, studentId = 'student001', studentPasswor
     await expect(page.getByRole('heading', { name: /找到你的好位置/ })).toBeVisible();
 }
 
-async function loginAdmin(page: Page, studentId = 'admin001') {
+async function loginAdmin(page: Page, studentId = adminStudentId) {
     await page.goto('/login?mode=admin');
     await page.getByLabel('学号').fill(studentId);
-    await page.getByLabel('管理员密钥').fill(adminKey);
+    await page.getByLabel('密码').fill(adminPassword);
     await page.getByRole('button', { name: '进入管理员后台' }).click();
     await expect(page.getByRole('heading', { name: /空间管理概览/ })).toBeVisible();
 }
@@ -55,7 +55,7 @@ test('学号注册、登录、管理员开放场次、学员预约与后台 CSV 
         await learner.getByLabel('昵称').fill('端到端学员');
         await learner.getByLabel('学号').fill(studentId);
         await learner.getByLabel('密码').fill(studentPassword);
-        await learner.getByRole('button', { name: '注册学员账号' }).click();
+        await learner.getByRole('button', { name: '注册成员账号' }).click();
         await expect(learner.getByRole('heading', { name: /找到你的好位置/ })).toBeVisible();
         learnerId = (await db.user.findUniqueOrThrow({ where: { studentId_role: { studentId, role: 'USER' } } })).id;
         await learner.getByRole('button', { name: '退出登录并返回入口', exact: true }).click();
@@ -129,8 +129,8 @@ test('学员无权访问后台，管理员登录可创建场次', async ({ playw
     let sessionId = '';
     try {
         expect((await learner.get('/api/admin/users')).status()).toBe(401);
-        expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey: 'wrong' } })).status()).toBe(403);
-        expect((await admin.post('/api/auth/login', { data: { studentId: 'admin001', role: 'ADMIN', adminKey } })).ok()).toBeTruthy();
+        expect((await admin.post('/api/auth/login', { data: { studentId: adminStudentId, role: 'ADMIN', password: 'wrong' } })).status()).toBe(401);
+        expect((await admin.post('/api/auth/login', { data: { studentId: adminStudentId, role: 'ADMIN', password: adminPassword } })).ok()).toBeTruthy();
         const startsAt = new Date(Date.now() + 3 * 3600000);
         const endsAt = new Date(startsAt.getTime() + 3600000);
         const created = await admin.post('/api/sessions', { data: { layoutId: 'seed-layout', startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), requiredAssistants: 1, open: false } });

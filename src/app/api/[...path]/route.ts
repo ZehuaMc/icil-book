@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { compare, hash } from 'bcryptjs';
 import { Prisma } from '@prisma/client';
@@ -14,7 +13,6 @@ import { password, studentId, groupSchema, layoutSchema, sessionSchema, id } fro
 export const runtime = 'nodejs';
 const sessionInclude = { layout: { include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' as const } } } }, coverage: { include: { assistant: { select: { id: true, name: true } } } }, adminBookings: { include: { admin: { select: { id: true, name: true } } } }, reservations: { where: { cancelledAt: null }, select: { id: true, userId: true, seatId: true, startsAt: true, endsAt: true, checkedInAt: true, user: { select: { role: true } } } } } as const;
 const recordInclude = { session: { include: { layout: { include: { venue: true } } } }, seat: true, user: { select: { id: true, name: true, studentId: true, email: true, role: true } } } as const;
-const ADMIN_REGISTRATION_KEY = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
 type SessionView = Prisma.SessionGetPayload<{ include: typeof sessionInclude }>;
 function sessionsOverlap(a: SessionView, b: SessionView) {
     return a.layout.venueId === b.layout.venueId && a.startsAt < b.endsAt && a.endsAt > b.startsAt;
@@ -162,7 +160,7 @@ async function dispatch(req: NextRequest, path: string[]) {
     if (key === 'auth/me' && method === 'GET')
         return { user: await currentUser() };
     if ((key === 'auth/login' || key === 'auth/register') && method === 'POST') {
-        const input = z.object({ studentId, password: z.string().max(100).optional(), name: z.string().trim().min(1).max(60).optional(), role: z.enum(['USER', 'ADMIN']).optional(), adminKey: z.string().max(100).optional() }).parse(await body(req));
+        const input = z.object({ studentId, password: z.string().max(100).optional(), name: z.string().trim().min(1).max(60).optional(), role: z.enum(['USER', 'ADMIN']).optional() }).parse(await body(req));
         // Shared database counter works across app processes; do not trust client-supplied IP headers.
         const limiterKey = `${key}:${input.role ?? 'USER'}:${hashToken(input.studentId)}`;
         const attempt = await db.loginAttempt.upsert({ where: { key: limiterKey }, create: { key: limiterKey, resetAt: new Date(Date.now() + 900000) }, update: { count: { increment: 1 } } });
@@ -172,54 +170,32 @@ async function dispatch(req: NextRequest, path: string[]) {
             check(attempt.count <= 15, '尝试次数过多，请 15 分钟后重试', 429);
         let user;
         if (key === 'auth/register') {
+            check(input.role !== 'ADMIN', '管理员账号不能注册，请使用部署配置初始化', 403);
             check(input.name, '请输入姓名');
-            const wantsAdmin = input.role === 'ADMIN';
-            if (wantsAdmin) {
-                check(input.adminKey === ADMIN_REGISTRATION_KEY, '管理员密钥错误', 403);
-            }
-            else {
-                check(input.password && password.safeParse(input.password).success, '密码至少需要 10 位字符');
-            }
+            check(input.password && password.safeParse(input.password).success, '密码至少需要 10 位字符');
             const settings = await db.appSetting.findUnique({ where: { id: 'main' } });
             check(settings, '请先初始化数据库', 503);
-            const generatedEmail = `${input.studentId}+${wantsAdmin ? 'admin' : 'user'}@student.local`;
-            if (wantsAdmin) {
-                const existingAdmin = await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: 'ADMIN' } } });
-                if (existingAdmin) {
-                    check(!!existingAdmin.deletedAt, '该学号已注册管理员账号，请直接登录', 409);
-                    user = await db.user.update({ where: { id: existingAdmin.id }, data: { name: input.name, enabled: true, deletedAt: null, groupId: settings.defaultGroupId, passwordHash: await hash(randomBytes(32).toString('hex'), 12) }, select: publicUser });
+            const generatedEmail = `${input.studentId}+user@student.local`;
+            const existingLearner = await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: 'USER' } } });
+            if (existingLearner) {
+                if (existingLearner.deletedAt) {
+                    user = await db.user.update({ where: { id: existingLearner.id }, data: { name: input.name, enabled: true, deletedAt: null, groupId: settings.defaultGroupId, passwordHash: await hash(input.password!, 12) }, select: publicUser });
                 }
                 else {
-                    user = await db.user.create({ data: { name: input.name, studentId: input.studentId, email: generatedEmail, role: 'ADMIN', passwordHash: await hash(randomBytes(32).toString('hex'), 12), groupId: settings.defaultGroupId }, select: publicUser });
+                    check(false, '该学号已注册学员账号，请直接登录', 409);
                 }
             }
             else {
-                const existingLearner = await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: 'USER' } } });
-                if (existingLearner) {
-                    if (existingLearner.deletedAt) {
-                        user = await db.user.update({ where: { id: existingLearner.id }, data: { name: input.name, enabled: true, deletedAt: null, groupId: settings.defaultGroupId, passwordHash: await hash(input.password!, 12) }, select: publicUser });
-                    }
-                    else {
-                        check(false, '该学号已注册学员账号，请直接登录', 409);
-                    }
-                }
-                else {
-                    user = await db.user.create({ data: { name: input.name, studentId: input.studentId, email: generatedEmail, role: 'USER', passwordHash: await hash(input.password!, 12), groupId: settings.defaultGroupId }, select: publicUser });
-                }
+                user = await db.user.create({ data: { name: input.name, studentId: input.studentId, email: generatedEmail, role: 'USER', passwordHash: await hash(input.password!, 12), groupId: settings.defaultGroupId }, select: publicUser });
             }
         }
         else {
-            const adminLogin = input.role === 'ADMIN' || !!input.adminKey;
-            const account = await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: adminLogin ? 'ADMIN' : 'USER' } } });
-            if (adminLogin) {
-                check(input.adminKey === ADMIN_REGISTRATION_KEY, '管理员密钥错误', 403);
-                check(account && isOperator(account) && account.enabled, '管理员学号不存在或账号已停用', 401);
-            }
-            else {
-                check(input.password, '请输入密码');
-                const matched = await compare(input.password, account?.passwordHash ?? '$2b$12$YGMMy9YbCI1QLcQ8ZqWr6u2ml.VFu9y1y90MhQbcTmwUxNp.t3Izq');
-                check(account && matched && account.enabled, '学号或密码错误，或账号已停用', 401);
-            }
+            check(input.password, '请输入密码');
+            const account = input.role === 'ADMIN'
+                ? await db.user.findFirst({ where: { studentId: input.studentId, role: { in: ['ADMIN', 'ASSISTANT'] } } })
+                : await db.user.findUnique({ where: { studentId_role: { studentId: input.studentId, role: 'USER' } } });
+            const matched = await compare(input.password, account?.passwordHash ?? '$2b$12$YGMMy9YbCI1QLcQ8ZqWr6u2ml.VFu9y1y90MhQbcTmwUxNp.t3Izq');
+            check(account && matched && account.enabled && !account.deletedAt, '学号或密码错误，或账号已停用', 401);
             user = await db.user.findUniqueOrThrow({ where: { id: account.id }, select: publicUser });
         }
         await createLogin(user.id);
@@ -263,8 +239,8 @@ async function dispatch(req: NextRequest, path: string[]) {
                 const adminBookings = [...new Map([...virtual.adminBookings, ...related.flatMap(s => s.adminBookings)].map(booking => [booking.adminId, booking])).values()];
                 const coverage = [...new Map([...virtual.coverage, ...related.flatMap(s => s.coverage)].map(record => [record.assistantId, record])).values()];
                 const staffPresenceWindows = related.flatMap(actual => [
-                    ...(actual.adminBookings.length || actual.coverage.length ? [{ startsAt: actual.startsAt, endsAt: actual.endsAt }] : []),
-                    ...actual.reservations.filter(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT').map(r => ({ startsAt: r.startsAt, endsAt: r.endsAt })),
+                    ...(actual.coverage.length ? [{ startsAt: actual.startsAt, endsAt: actual.endsAt }] : []),
+                    ...actual.reservations.filter(r => r.user.role === 'ASSISTANT').map(r => ({ startsAt: r.startsAt, endsAt: r.endsAt })),
                 ]);
                 return { ...virtual, reservations, adminBookings, coverage, staffPresenceWindows };
             });
@@ -278,14 +254,13 @@ async function dispatch(req: NextRequest, path: string[]) {
         return { sessions: mergedSessions.map(s => {
             const matchingBlocks = blocks.filter(block => block.startsAt < s.endsAt && block.endsAt > s.startsAt);
             const fullSessionBlock = matchingBlocks.some(block => block.kind === 'DAY' || (block.startsAt <= s.startsAt && block.endsAt >= s.endsAt));
-            return { ...s, adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.adminBookings.length > 0 || s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
+            return { ...s, adminReady: s.icilOnly || s.open, bookingBlocks: matchingBlocks, bookingBlock: matchingBlocks[0] ?? null, bookingBlocked: s.icilOnly ? fullSessionBlock : matchingBlocks.length > 0, sessionBlocked: matchingBlocks.some(block => block.kind === 'SESSION' && block.sessionId === s.id), dayBlocked: matchingBlocks.some(block => block.kind === 'DAY'), hasAdminSeat: s.reservations.some(r => r.user.role === 'ADMIN' || r.user.role === 'ASSISTANT'), assistantPresent: s.coverage.length > 0 || s.reservations.some(r => r.user.role === 'ASSISTANT'), allowed: !!user && (isOperator(user) || user.memberType === 'ICIL' || user.group.canReserve), reservations: s.reservations.map(r => ({ seatId: r.seatId, mine: !isOperator(user) && r.userId === user?.id, id: !isOperator(user) && r.userId === user?.id ? r.id : undefined, startsAt: r.startsAt, endsAt: r.endsAt, checkedInAt: !isOperator(user) && r.userId === user?.id ? r.checkedInAt : undefined })), ...(s.icilOnly ? { staffPresenceWindows: s.staffPresenceWindows ?? [] } : {}) };
         }) };
     }
     const user = await requireUser();
     await expireUnconfirmedReservations();
     if (key === 'auth/change-password' && method === 'POST') {
         const data = z.object({ currentPassword: z.string().min(1).max(100), newPassword: password }).parse(await body(req));
-        check(!isOperator(user), '管理员账号使用密钥登录，请联系其他管理员重置', 403);
         const account = await db.user.findUnique({ where: { id: user.id }, select: { passwordHash: true } });
         const matched = await compare(data.currentPassword, account?.passwordHash ?? '$2b$12$YGMMy9YbCI1QLcQ8ZqWr6u2ml.VFu9y1y90MhQbcTmwUxNp.t3Izq');
         check(matched, '当前密码错误', 401);
@@ -314,7 +289,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         return { ok: true };
     }
     if (key === 'assistant/options' && method === 'GET') {
-        check(isOperator(user), '需要管理员权限', 403);
+        check(user.role === 'ASSISTANT', '需要助教权限', 403);
         return { layouts: await db.layoutVersion.findMany({ where: { status: 'PUBLISHED' }, include: { venue: true, elements: true, seats: { orderBy: { code: 'asc' } } }, orderBy: { createdAt: 'desc' } }) };
     }
     if (key === 'reservations' && method === 'POST') {
@@ -336,7 +311,7 @@ async function dispatch(req: NextRequest, path: string[]) {
     }
     if (path[0] === 'reservations' && path[1] === 'coverage' && path.length === 3 && method === 'DELETE')
         return removeCoverage(user.id, path[2]);
-    check(isOperator(user), '需要管理员权限', 403);
+    check(user.role === 'ADMIN', '需要管理员权限', 403);
     if (path[0] === 'admin' && path[1] === 'sessions' && path.length === 4 && path[3] === 'disable' && (method === 'POST' || method === 'DELETE')) {
         return serial(async (tx) => {
             const session = await tx.session.findUnique({ where: { id: path[2] } });
@@ -469,7 +444,7 @@ async function dispatch(req: NextRequest, path: string[]) {
         });
     }
     if (path[0] === 'admin' && path[1] === 'users' && path.length === 3 && method === 'PATCH') {
-        const data = z.object({ name: z.string().trim().min(1).max(60), role: z.enum(['ADMIN', 'USER']), memberType: z.enum(['YSYX', 'ICIL']).default('YSYX'), enabled: z.boolean(), groupId: id }).parse(await body(req));
+        const data = z.object({ name: z.string().trim().min(1).max(60), role: z.enum(['ADMIN', 'ASSISTANT', 'USER']), memberType: z.enum(['YSYX', 'ICIL']).default('YSYX'), enabled: z.boolean(), groupId: id }).parse(await body(req));
         return serial(async (tx) => {
             await lockInvariant(tx, 'admin-role-protection');
             await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${path[2]} FOR UPDATE`;

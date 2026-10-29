@@ -48,7 +48,8 @@ export async function reserveSeat(actorId: string, sessionId: string, seatId: st
             check(endsAt <= maxMemberBookingTime(), '成员最多只能提前一天预约', 403);
             if (user.memberType === 'YSYX') {
                 check(session.open, '管理员尚未开放此时间，暂未开放选座', 403);
-                check(await tx.reservation.count({ where: { sessionId, cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } } } }) > 0, '当前时段暂无管理员工位，暂不能预约', 403);
+                const assistantPresence = await tx.reservation.count({ where: { sessionId, cancelledAt: null, user: { role: 'ASSISTANT' } } }) + await tx.assistantCoverage.count({ where: { sessionId, assistant: { role: 'ASSISTANT' } } });
+                check(assistantPresence > 0, '当前时段暂无助教保障，暂不能预约', 403);
                 check(groupAllows(user.group, startsAt, endsAt), '所属分组不允许预约此时段', 403);
             }
         }
@@ -87,14 +88,11 @@ export async function cancelReservation(actorId: string, id: string) {
         const cancelledAt = new Date();
         const result = await tx.reservation.update({ where: { id }, data: { cancelledAt } });
         await audit(tx, actorId, 'RESERVATION_CANCEL', id, { sessionId: session.id });
-        // An administrator reservation is the seat that keeps the time open.
-        // Removing the last one closes the time and cancels learner bookings
-        // in the same transaction, so no learner can book a slot without staff.
+        // A YSYX member may book only while an ASSISTANT is present. Removing
+        // the last assistant reservation or coverage cancels affected bookings.
         if (isOperator(fresh.user)) {
-            const remainingAdmins = await tx.reservation.count({
-                where: { sessionId: session.id, cancelledAt: null, user: { role: { in: ['ADMIN', 'ASSISTANT'] } } },
-            });
-            if (remainingAdmins === 0) {
+            const assistantPresence = await tx.reservation.count({ where: { sessionId: session.id, cancelledAt: null, user: { role: 'ASSISTANT' } } }) + await tx.assistantCoverage.count({ where: { sessionId: session.id, assistant: { role: 'ASSISTANT' } } });
+            if (assistantPresence === 0) {
                 const learners = await tx.reservation.findMany({
                     where: { sessionId: session.id, cancelledAt: null, user: { role: 'USER', memberType: 'YSYX' } },
                     select: { id: true, userId: true, seat: { select: { code: true } } },
@@ -107,11 +105,12 @@ export async function cancelReservation(actorId: string, id: string) {
                         data: learners.map(learner => ({
                             recipientId: learner.userId,
                             type: 'BOOKING_CANCELLED',
-                            message: `${starts}至${ends}的预约时段因管理员取消坐镇预约、暂无其他管理员值守，已关闭。你的${learner.seat.code}号工位预约已自动取消。`,
+                            message: `${starts}至${ends}的预约时段因暂无助教保障，已关闭。你的${learner.seat.code}号工位预约已自动取消。`,
                         })),
                     });
                 }
-                await audit(tx, actorId, 'SESSION_ADMIN_UNREADY', session.id, { reason: 'NO_ADMIN_BOOKING', cancelledLearners: learners.length });
+                await tx.session.update({ where: { id: session.id }, data: { open: false } });
+                await audit(tx, actorId, 'SESSION_ADMIN_UNREADY', session.id, { reason: 'NO_ASSISTANT_PRESENCE', cancelledLearners: learners.length });
             }
         }
         return result;
@@ -185,7 +184,7 @@ export async function replaceAdminSeat(actorId: string, sessionId: string, seatI
 export async function addCoverage(actorId: string, sessionId: string, requestedStartsAt?: string, requestedEndsAt?: string) {
     return serial(async (tx) => {
         const { user, session } = await bookingContext(tx, actorId, sessionId);
-        check(isOperator(user), '仅助教或管理员可以登记现场保障', 403);
+        check(user.role === 'ASSISTANT', '只有助教可以登记现场保障', 403);
         const startsAt = requestedStartsAt ? new Date(requestedStartsAt) : session.startsAt;
         const endsAt = requestedEndsAt ? new Date(requestedEndsAt) : session.endsAt;
         check(Number.isFinite(startsAt.getTime()) && Number.isFinite(endsAt.getTime()) && endsAt > startsAt, '请选择有效的开始和结束时间');
@@ -209,7 +208,7 @@ export async function addCoverage(actorId: string, sessionId: string, requestedS
 export async function createAssistantSession(actorId: string, layoutId: string, startsAtValue: string, endsAtValue: string) {
     return serial(async (tx) => {
         const user = await tx.user.findUnique({ where: { id: actorId } });
-        check(user?.enabled && isOperator(user), '仅助教或管理员可以创建保障时段', 403);
+        check(user?.enabled && user.role === 'ASSISTANT', '只有助教可以创建保障时段', 403);
         const startsAt = new Date(startsAtValue), endsAt = new Date(endsAtValue);
         check(Number.isFinite(startsAt.getTime()) && Number.isFinite(endsAt.getTime()) && endsAt > startsAt, '请选择有效的开始和结束时间');
         const now = new Date();

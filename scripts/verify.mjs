@@ -1,14 +1,14 @@
 import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 
-const required = ['DATABASE_URL', 'SEED_PASSWORD'];
+const required = ['DATABASE_URL', 'ADMIN_STUDENT_ID', 'ADMIN_PASSWORD'];
 const missing = required.filter(key => !process.env[key]);
 if (missing.length) {
-    console.error(`完整验证需要专用测试数据库及种子密码。缺少环境变量：${missing.join(', ')}。参见 README.md。`);
+    console.error(`完整验证需要专用测试数据库及管理员配置。缺少环境变量：${missing.join(', ')}。参见 README.md。`);
     process.exit(1);
 }
-if (process.env.SEED_PASSWORD.length < 10) {
-    console.error('SEED_PASSWORD 至少需要 10 位字符。');
+if (process.env.ADMIN_PASSWORD.length < 10) {
+    console.error('ADMIN_PASSWORD 至少需要 10 位字符。');
     process.exit(1);
 }
 if (!existsSync('node_modules/.bin/prisma')) {

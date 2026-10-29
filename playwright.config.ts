@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-if (!process.env.DATABASE_URL || !process.env.SEED_PASSWORD) throw new Error('浏览器验证需要 DATABASE_URL 和 SEED_PASSWORD；请配置并初始化专用测试数据库');
+if (!process.env.DATABASE_URL || !process.env.ADMIN_STUDENT_ID || !process.env.ADMIN_PASSWORD) throw new Error('浏览器验证需要 DATABASE_URL、ADMIN_STUDENT_ID 和 ADMIN_PASSWORD；请配置并初始化专用测试数据库');
 export default defineConfig({
   forbidOnly: !!process.env.CI,
   reporter: [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'reports/playwright.json' }]],

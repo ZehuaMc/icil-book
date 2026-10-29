@@ -2,12 +2,12 @@
 
 ## 本机 Docker 运行
 
-应用、迁移与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目；PostgreSQL 数据保存到 `.env.deploy` 中 `DB_DATA_DIR` 指定的宿主机目录（默认 `./data/postgres`），不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`。
+应用、迁移与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目；PostgreSQL 数据保存到 `.env.deploy` 中 `DB_DATA_DIR` 指定的宿主机目录（默认 `./data/postgres`），不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`，可由宿主机 Nginx、Caddy 等反向代理转发。
 
 ```bash
 cp .env.deploy.example .env.deploy
 chmod 600 .env.deploy
-# 编辑 DB_PASSWORD（建议随机十六进制）、SEED_PASSWORD 和 APP_ORIGIN
+# 编辑 DB_PASSWORD（建议随机十六进制）、ADMIN_STUDENT_ID、ADMIN_PASSWORD 和 APP_ORIGIN
 # DB_DATA_DIR 可改为绝对路径，例如 /srv/icil-book/postgres-data
 # 本机 HTTP：APP_ORIGIN=http://localhost:3100，COOKIE_SECURE=false
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build --wait
@@ -15,9 +15,30 @@ docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate npm run db:seed
 ```
 
-打开 http://localhost:3100。管理员邮箱为 `admin@station.local`，密码取 `.env.deploy` 的 `SEED_PASSWORD`。助教和学员邮箱见 README。`APP_ORIGIN` 必须与浏览器实际使用的协议、主机和端口一致。
+打开 `APP_ORIGIN` 对应的地址。管理员使用 `.env.deploy` 中的 `ADMIN_STUDENT_ID` 和 `ADMIN_PASSWORD` 登录；`db:seed` 不会创建示例学员。学员可自行注册，默认是一生一芯成员。管理员可在用户管理中把成员调整为 ICIL 成员或助教。
 
-镜像以非 root 用户运行。迁移任务成功后才启动应用；`/api/health` 同时检查 Web 服务和数据库连接。示例数据初始化是独立命令，重复运行保留既有账号、布局、场次及手动取消的助教保障。
+如果反向代理监听公网域名并转发到 `http://127.0.0.1:3100`，例如 Nginx 的 `proxy_pass http://127.0.0.1:3100`，`.env.deploy` 应设置为：
+
+```env
+APP_ORIGIN=https://你的公网域名
+COOKIE_SECURE=true
+```
+
+`APP_ORIGIN` 写用户浏览器访问的公网地址，不写代理到应用的 `127.0.0.1`；应用端口仍只绑定本机，因此不会直接暴露数据库或应用端口。
+
+Nginx 的核心代理配置可以是：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3100;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+镜像以非 root 用户运行，并包含 `public/` 静态资源。迁移任务成功后才启动应用；`/api/health` 同时检查 Web 服务和数据库连接。管理员初始化是独立命令，重复运行会更新 `.env.deploy` 中管理员的密码和资料，不创建学员。
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml ps

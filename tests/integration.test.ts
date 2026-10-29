@@ -28,7 +28,7 @@ test('PostgreSQL: 管理员开放、换座、暂停、授权和并发预约', as
 
         await t.test('未开放时学员不能预约，助教保障不替代开放状态', async () => {
             await assert.rejects(reserveSeat(ids[1], sessionId, a.id), /管理员尚未开放/);
-            await assert.rejects(addCoverage(ids[1], sessionId), /仅助教/);
+            await assert.rejects(addCoverage(ids[1], sessionId), /助教/);
         });
         const adminBooking = await reserveSeat(ids[0], sessionId, b.id);
         await db.session.update({ where: { id: sessionId }, data: { open: true } });

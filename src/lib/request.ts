@@ -5,11 +5,13 @@ const MAX_BODY_BYTES = 1_000_000;
 export function assertSameOrigin(req: Request) {
     if (req.method === 'GET' || req.method === 'HEAD') return;
     const origin = req.headers.get('origin');
-    // Next's internal URL may use localhost even when the browser uses 127.0.0.1.
-    // HTTPS proxies must configure the public origin; do not trust forwarded headers.
+    // Next's internal URL may use localhost or 127.0.0.1 behind a reverse proxy.
     const url = new URL(req.url);
-    const expectedOrigin = process.env.APP_ORIGIN ?? `${url.protocol}//${req.headers.get('host') ?? url.host}`;
-    check(!origin || origin === expectedOrigin, '请求来源无效', 403);
+    const configuredOrigins = (process.env.APP_ORIGIN ?? '').split(',').map(value => value.trim()).filter(Boolean).map(value => new URL(value).origin);
+    const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() || url.protocol.replace(':', '');
+    const forwardedHost = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim() || req.headers.get('host') || url.host;
+    const expectedOrigins = configuredOrigins.length ? configuredOrigins : [`${forwardedProto}://${forwardedHost}`];
+    check(!origin || expectedOrigins.includes(origin), '请求来源无效', 403);
     check(req.headers.get('sec-fetch-site') !== 'cross-site', '请求来源无效', 403);
 }
 

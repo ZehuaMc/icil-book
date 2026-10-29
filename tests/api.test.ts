@@ -100,11 +100,13 @@ test('管理员暂停时释放YSYX预约，随后可以更换工位', async () =
     const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
     const group = await db.group.create({ data: { name: `seat-change-${suffix}`, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
     const admin = await db.user.create({ data: { name: '换座管理员', studentId: `sa${suffix}`, email: `sa${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
+    const assistant = await db.user.create({ data: { name: '换座助教', studentId: `st${suffix}`, email: `st${suffix}@test.local`, passwordHash: 'unused', role: 'ASSISTANT', groupId: group.id } });
     const learner = await db.user.create({ data: { name: '换座学员', studentId: `su${suffix}`, email: `su${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `seat-change-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `seat-change-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }, { code: 'A03', x: 30, y: 10 }] } }, include: { seats: true } });
     const startsAt = new Date(Date.now() + 86400000), endsAt = new Date(Date.now() + 86400000 + 2 * 3600000);
     const session = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt, open: false } });
+    await db.assistantCoverage.create({ data: { sessionId: session.id, assistantId: assistant.id } });
     const adminToken = randomUUID(), learnerToken = randomUUID();
     try {
         const expiresAt = new Date(Date.now() + 60000);
@@ -133,11 +135,12 @@ test('管理员暂停时释放YSYX预约，随后可以更换工位', async () =
         assert.equal((await db.session.findUniqueOrThrow({ where: { id: session.id } })).open, false);
     }
     finally {
-        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, learner.id] } } });
+        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, assistant.id, learner.id] } } });
+        await db.assistantCoverage.deleteMany({ where: { sessionId: session.id } });
         await db.reservation.deleteMany({ where: { sessionId: session.id } });
         await db.session.delete({ where: { id: session.id } });
-        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, learner.id] } } });
-        await db.user.deleteMany({ where: { id: { in: [admin.id, learner.id] } } });
+        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, assistant.id, learner.id] } } });
+        await db.user.deleteMany({ where: { id: { in: [admin.id, assistant.id, learner.id] } } });
         await db.layoutVersion.delete({ where: { id: layout.id } });
         await db.venue.delete({ where: { id: venue.id } });
         await db.group.delete({ where: { id: group.id } });
@@ -186,6 +189,7 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
     const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
     const group = await db.group.create({ data: { name: `member-rule-${suffix}`, canReserve: false } });
     const admin = await db.user.create({ data: { name: '时段管理员', studentId: `ad${suffix}`, email: `ad${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
+    const assistant = await db.user.create({ data: { name: '时段助教', studentId: `at${suffix}`, email: `at${suffix}@test.local`, passwordHash: 'unused', role: 'ASSISTANT', groupId: group.id } });
     const icil = await db.user.create({ data: { name: 'ICIL成员', studentId: `ic${suffix}`, email: `ic${suffix}@test.local`, passwordHash: 'unused', role: 'USER', memberType: 'ICIL', groupId: group.id } });
     const ysyx = await db.user.create({ data: { name: 'YSYX成员', studentId: `ys${suffix}`, email: `ys${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `member-venue-${suffix}`, location: 'test' } });
@@ -195,7 +199,7 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
     const adminSlotStart = new Date(`${date}T10:00:00+08:00`), adminSlotEnd = new Date(`${date}T11:00:00+08:00`);
     const adminSession = await db.session.create({ data: { layoutId: layout.id, startsAt: adminSlotStart, endsAt: adminSlotEnd, open: false } });
-    await db.reservation.create({ data: { sessionId: adminSession.id, seatId: layout.seats[0].id, userId: admin.id, startsAt: adminSlotStart, endsAt: adminSlotEnd } });
+    await db.reservation.create({ data: { sessionId: adminSession.id, seatId: layout.seats[0].id, userId: assistant.id, startsAt: adminSlotStart, endsAt: adminSlotEnd } });
     const icilToken = randomUUID(), ysyxToken = randomUUID(), adminToken = randomUUID();
     let icilSessionId = '';
     try {
@@ -224,14 +228,14 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
         assert.equal(blockedBooking.status, 403, await blockedBooking.clone().text());
     }
     finally {
-        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, icil.id, ysyx.id] } } });
+        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, assistant.id, icil.id, ysyx.id] } } });
         await db.reservation.deleteMany({ where: { sessionId: { in: [icilSessionId, adminSession.id] } } });
         await db.bookingBlock.deleteMany({ where: { sessionId: adminSession.id } });
         if (icilSessionId) await db.session.delete({ where: { id: icilSessionId } });
         await db.session.delete({ where: { id: adminSession.id } });
         await db.session.deleteMany({ where: { layoutId: layout.id, icilOnly: true } });
         await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, icil.id, ysyx.id] } } });
-        await db.user.deleteMany({ where: { id: { in: [admin.id, icil.id, ysyx.id] } } });
+        await db.user.deleteMany({ where: { id: { in: [admin.id, assistant.id, icil.id, ysyx.id] } } });
         await db.layoutVersion.delete({ where: { id: layout.id } });
         await db.venue.delete({ where: { id: venue.id } });
         await db.group.delete({ where: { id: group.id } });
@@ -386,24 +390,21 @@ test('管理员只能重置学员密码，学员可改密且只保留当前会�
         await db.group.delete({ where: { id: group.id } });
     }
 });
-test('已注销的学员和管理员可用相同学号重新注册并登录', async () => {
+test('已注销的学员可用相同学号重新注册并登录，管理员不可注册', async () => {
     const prefix = randomUUID().replaceAll('-', '').slice(0, 12);
     const { db } = await import('../src/lib/db');
     const { hashToken } = await import('../src/lib/auth');
     const previousSettings = await db.appSetting.findUnique({ where: { id: 'main' } });
     const group = await db.group.create({ data: { name: `reregister-${prefix}` } });
-    const roles = ['USER', 'ADMIN'] as const;
+    const roles = ['USER'] as const;
     const accounts: { id: string; studentId: string; role: typeof roles[number] }[] = [];
     try {
         await db.appSetting.upsert({ where: { id: 'main' }, create: { id: 'main', defaultGroupId: group.id }, update: { defaultGroupId: group.id } });
         for (const role of roles) {
-            const studentId = `rr${prefix}${role === 'ADMIN' ? 'a' : 'u'}`;
+            const studentId = `rr${prefix}u`;
             const firstPassword = 'before-delete-password';
             const nextPassword = 'after-delete-password';
-            const adminKey = process.env.ADMIN_REGISTRATION_KEY ?? 'icilxysyx';
-            const payload = (name: string, password: string) => role === 'ADMIN'
-                ? { studentId, name, role, adminKey }
-                : { studentId, name, role, password };
+            const payload = (name: string, password: string) => ({ studentId, name, role, password });
 
             const first = await call('auth/register', 'POST', JSON.stringify(payload('注销前账号', firstPassword)));
             assert.equal(first.status, 200, role);
@@ -420,7 +421,7 @@ test('已注销的学员和管理员可用相同学号重新注册并登录', as
             assert.equal(renewedUser.deletedAt, null);
             assert.equal(renewedUser.name, '重新注册账号');
 
-            const login = await call('auth/login', 'POST', JSON.stringify(role === 'ADMIN' ? { studentId, role, adminKey } : { studentId, role, password: nextPassword }));
+            const login = await call('auth/login', 'POST', JSON.stringify({ studentId, role, password: nextPassword }));
             assert.equal(login.status, 200, role);
             assert.equal((await login.json()).user.id, original.id);
             await db.authSession.deleteMany({ where: { userId: original.id } });
@@ -441,5 +442,9 @@ test('已注销的学员和管理员可用相同学号重新注册并登录', as
         await db.group.delete({ where: { id: group.id } });
         await db.$disconnect();
     }
+});
+test('管理员注册入口始终关闭', async () => {
+    const response = await call('auth/register', 'POST', JSON.stringify({ studentId: `newadmin${randomUUID().slice(0, 8)}`, name: '非法管理员', role: 'ADMIN', password: 'long-enough-password' }));
+    assert.equal(response.status, 403);
 });
 test.after(() => db.$disconnect());
