@@ -2,11 +2,12 @@ import { test as base, expect, type APIRequestContext } from '@playwright/test';
 import { PrismaClient } from '@prisma/client';
 import { randomBytes, createHash, randomUUID } from 'node:crypto';
 import { hash } from 'bcryptjs';
+import { localParts } from '../src/lib/rules';
 
 const db = new PrismaClient();
 type Fixture = {
     admin: APIRequestContext; assistant: APIRequestContext; learner: APIRequestContext;
-    users: { id: string; studentId: string; email: string; name: string; role: string; groupId: string; enabled: boolean }[];
+    users: { id: string; studentId: string; email: string; name: string; role: string; groupId: string | null; enabled: boolean }[];
     groupId: string; venueId: string; layoutId: string; sessionId: string;
     seats: { id: string; code: string }[]; tokens: string[];
     input: { layoutId: string; startsAt: string; endsAt: string; requiredAssistants: number; open: boolean };
@@ -14,10 +15,11 @@ type Fixture = {
 const test = base.extend<{ data: Fixture }>({
     data: async ({ playwright, baseURL }, use) => {
         const prefix = `accept-${randomUUID()}`;
-        const group = await db.group.create({ data: { name: prefix, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
+        const group = await db.group.create({ data: { name: prefix } });
         const venue = await db.venue.create({ data: { name: prefix, location: '验收场地' } });
         const layout = await db.layoutVersion.create({ data: { name: prefix, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'T01', x: 100, y: 100 }, { code: 'T02', x: 200, y: 100 }, { code: 'STAFF', x: 300, y: 100, fixedForAssistant: true }] } }, include: { seats: true } });
-        const startsAt = new Date(Math.ceil(Date.now() / 60000) * 60000 + 3600000).toISOString();
+        const tomorrow = localParts(new Date(Date.now() + 86400000)).date;
+        const startsAt = new Date(`${tomorrow}T09:00:00+08:00`).toISOString();
         const endsAt = new Date(Date.parse(startsAt) + 3600000).toISOString();
         const input = { layoutId: layout.id, startsAt, endsAt, requiredAssistants: 1, open: true };
         const session = await db.session.create({ data: input });
@@ -37,6 +39,7 @@ const test = base.extend<{ data: Fixture }>({
             const layoutIds = (await db.layoutVersion.findMany({ where: { venueId: venue.id } })).map(l => l.id);
             const sessionIds = (await db.session.findMany({ where: { layoutId: { in: layoutIds } } })).map(s => s.id);
             await db.auditLog.deleteMany({ where: { actorId: { in: userIds } } });
+            await db.bookingBlock.deleteMany({ where: { createdById: { in: userIds } } });
             await db.reservation.deleteMany({ where: { sessionId: { in: sessionIds } } });
             await db.assistantCoverage.deleteMany({ where: { sessionId: { in: sessionIds } } });
             await db.session.deleteMany({ where: { id: { in: sessionIds } } });
@@ -47,13 +50,11 @@ const test = base.extend<{ data: Fixture }>({
         }
     },
 });
-const userInput = (u: Fixture['users'][number], patch: object = {}) => ({ name: u.name, role: u.role, groupId: u.groupId, enabled: u.enabled, ...patch });
+const userInput = (u: Fixture['users'][number], patch: object = {}) => ({ name: u.name, role: u.role, enabled: u.enabled, ...patch });
 async function cover(data: Fixture) {
-    const staff = await data.admin.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats.find(s => s.code === 'STAFF')!.id } });
-    expect(staff.ok(), await staff.text()).toBeTruthy();
-    const response = await data.assistant.post('/api/reservations/coverage', { data: { sessionId: data.sessionId } });
+    const response = await data.assistant.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats.find(s => s.code === 'STAFF')!.id } });
     expect(response.ok(), await response.text()).toBeTruthy();
-    return (await response.json()).coverage.id as string;
+    return (await response.json()).reservation.id as string;
 }
 async function book(data: Fixture) {
     const response = await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } });
@@ -61,11 +62,11 @@ async function book(data: Fixture) {
     return (await response.json()).reservation.id as string;
 }
 
-test('并发创建重叠场次只成功一个，相邻时段允许', async ({ data }) => {
-    const input = { ...data.input, startsAt: data.input.endsAt, endsAt: new Date(Date.parse(data.input.endsAt) + 3600000).toISOString() };
-    const results = await Promise.all([data.admin.post('/api/sessions', { data: input }), data.admin.post('/api/sessions', { data: input })]);
-    expect(results.map(r => r.status()).sort()).toEqual([200, 409]);
-    expect(await db.session.count({ where: { layoutId: data.layoutId } })).toBe(2);
+test('后台创建和开放时段接口已移除，助教直接预约工位', async ({ data }) => {
+    expect((await data.admin.post('/api/sessions', { data: data.input })).status()).toBe(404);
+    expect((await data.admin.post(`/api/admin/sessions/${data.sessionId}/ready`)).status()).toBe(404);
+    await cover(data);
+    await book(data);
 });
 
 test('最后管理员保护：两名管理员同时降级或禁用仍保留一名', async ({ data, playwright, baseURL }) => {
@@ -93,24 +94,13 @@ test('最后管理员保护：两名管理员同时降级或禁用仍保留一�
     }
 });
 
-test('助教登记与降级/停用竞争不产生无效保障', async ({ data, playwright, baseURL }) => {
-    for (const patch of [{ enabled: false }, { role: 'USER' }]) {
-        await db.assistantCoverage.deleteMany({ where: { sessionId: data.sessionId } });
-        await db.user.update({ where: { id: data.users[1].id }, data: { role: 'ASSISTANT', enabled: true } });
-        const token = randomBytes(32).toString('hex');
-        await db.authSession.create({ data: { id: createHash('sha256').update(token).digest('hex'), userId: data.users[1].id, expiresAt: new Date(Date.now() + 3600000) } });
-        const assistant = await playwright.request.newContext({ baseURL, extraHTTPHeaders: { Cookie: `station_session=${token}` } });
-        const results = await Promise.all([
-            assistant.post('/api/reservations/coverage', { data: { sessionId: data.sessionId } }),
-            data.admin.patch(`/api/admin/users/${data.users[1].id}`, { data: userInput(data.users[1], patch) }),
-        ]);
-        await assistant.dispose();
-        expect(results.some(r => r.ok())).toBeTruthy();
-        expect(results.every(r => r.status() < 500)).toBeTruthy();
-        const user = await db.user.findUniqueOrThrow({ where: { id: data.users[1].id } });
-        const count = await db.assistantCoverage.count({ where: { assistantId: user.id } });
-        expect(count === 0 || (user.enabled && user.role === 'ASSISTANT')).toBeTruthy();
-    }
+test('助教预约与停用竞争后，成员不能用停用助教的预约取得资格', async ({ data }) => {
+    const results = await Promise.all([
+        data.assistant.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats.find(s => s.code === 'STAFF')!.id } }),
+        data.admin.patch(`/api/admin/users/${data.users[1].id}`, { data: userInput(data.users[1], { enabled: false }) }),
+    ]);
+    expect(results[1].ok()).toBeTruthy();
+    expect((await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } })).status()).toBe(403);
 });
 
 test('保存与发布竞争、复制版本后编辑保持旧场次布局稳定', async ({ data }) => {
@@ -135,39 +125,28 @@ test('保存与发布竞争、复制版本后编辑保持旧场次布局稳定',
     expect((await db.seat.findMany({ where: { layoutId: data.layoutId }, orderBy: { code: 'asc' } })).map(s => s.code)).toEqual(['STAFF', 'T01', 'T02']);
 });
 
-test('有预约场次锁定、关闭重开、管理员取消与失败事务日志', async ({ data }) => {
-    const coverageId = await cover(data);
-    const reservationId = await book(data);
-    const before = await db.auditLog.count({ where: { actorId: data.users[0].id } });
-    const otherLayout = await db.layoutVersion.create({ data: { name: '另一个布局', venueId: data.venueId, status: 'PUBLISHED' } });
-    for (const patch of [
-        { startsAt: new Date(Date.parse(data.input.startsAt) + 60000).toISOString() },
-        { requiredAssistants: 0 },
-        { layoutId: otherLayout.id },
-        { requiredAssistants: 2 },
-    ]) expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, ...patch } })).status()).toBe(400);
-    expect((await data.admin.delete(`/api/reservations/coverage/${coverageId}`)).status()).toBe(409);
-    expect(await db.auditLog.count({ where: { actorId: data.users[0].id } })).toBe(before);
-    expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, open: false } })).ok()).toBeTruthy();
-    expect((await data.admin.delete(`/api/reservations/${reservationId}`)).ok()).toBeTruthy();
-    expect((await db.reservation.findUniqueOrThrow({ where: { id: reservationId } })).cancelledAt).toBeTruthy();
-    expect((await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } })).status()).toBe(403);
-    expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: data.input })).ok()).toBeTruthy();
-    expect((await data.admin.delete(`/api/reservations/coverage/${coverageId}`)).ok()).toBeTruthy();
-    expect((await data.admin.put(`/api/sessions/${data.sessionId}`, { data: { ...data.input, startsAt: new Date(Date.parse(data.input.startsAt) + 60000).toISOString() } })).status()).toBe(400);
-    const logs = await db.auditLog.findMany({ where: { actorId: data.users[0].id } });
-    expect(logs.some(l => l.action === 'RESERVATION_CANCEL' && l.target === reservationId)).toBeTruthy();
-    expect(logs.some(l => l.action === 'COVERAGE_CANCEL' && l.target === coverageId)).toBeTruthy();
-});
-
-test('已登录分组/角色立即生效，禁止分组仍可取消自己的旧预约', async ({ data }) => {
+test('禁止预约时间取消范围内预约，解除后可以重新预约并保留取消历史', async ({ data }) => {
     await cover(data);
     const reservationId = await book(data);
-    await db.group.update({ where: { id: data.groupId }, data: { canReserve: false } });
-    const current = (await (await data.learner.get('/api/auth/me')).json()).user;
-    expect(current.group.canReserve).toBe(false);
-    expect((await data.learner.delete(`/api/reservations/${reservationId}`)).ok()).toBeTruthy();
+    const response = await data.admin.post('/api/admin/booking-blocks', { data: { startsAt: data.input.startsAt, endsAt: data.input.endsAt, reason: '设备维护' } });
+    expect(response.ok()).toBeTruthy();
+    const blockId = (await response.json()).block.id;
+    expect((await db.reservation.findUniqueOrThrow({ where: { id: reservationId } })).cancelledAt).toBeTruthy();
     expect((await data.learner.post('/api/reservations', { data: { sessionId: data.sessionId, seatId: data.seats[0].id } })).status()).toBe(403);
+    expect((await data.admin.delete(`/api/admin/booking-blocks/${blockId}`)).ok()).toBeTruthy();
+    await cover(data);
+    await book(data);
+});
+
+test('预约规则接口已移除，已有助教预约即可选座；角色变更立即生效', async ({ data }) => {
+    expect((await data.admin.get('/api/groups')).status()).toBe(404);
+    expect((await data.admin.put(`/api/groups/${data.groupId}`, { data: {} })).status()).toBe(404);
+    await cover(data);
+    const reservationId = await book(data);
+    const current = (await (await data.learner.get('/api/auth/me')).json()).user;
+    expect(current).not.toHaveProperty('group');
+    expect((await data.learner.delete(`/api/reservations/${reservationId}`)).ok()).toBeTruthy();
+    await book(data);
     expect((await data.admin.patch(`/api/admin/users/${data.users[2].id}`, { data: userInput(data.users[2], { role: 'ADMIN' }) })).ok()).toBeTruthy();
     expect((await data.learner.get('/api/admin/users')).ok()).toBeTruthy();
 });
@@ -195,7 +174,7 @@ test('真实 Cookie、会话过期/撤销、15 次限流与窗口重置', async 
     const password = 'Acceptance-Password-2026!';
     await db.user.update({ where: { id: user.id }, data: { passwordHash: await hash(password, 4) } });
     const client = await playwright.request.newContext({ baseURL });
-    const key = `auth/login:USER:${createHash('sha256').update(user.studentId).digest('hex')}`;
+    const key = `auth/login:${createHash('sha256').update(user.studentId).digest('hex')}`;
     try {
         const login = await client.post('/api/auth/login', { data: { studentId: user.studentId, password } });
         expect(login.ok()).toBeTruthy();
@@ -240,55 +219,33 @@ test('布局输入拒绝重复编号、非法关联、尺寸和旋转越界', as
         { elements: [{ ...element, x: 0, y: 0, rotation: 45 }] },
     ]) expect((await data.admin.put(`/api/layouts/${draft.id}`, { data: { ...input, ...patch } })).status()).toBe(400);
     expect((await data.admin.put(`/api/layouts/${draft.id}`, { data: input })).ok()).toBeTruthy();
-    const invalid = { name: '非法日期', canReserve: true, weeklyRules: [], dateRules: [{ date: '2026-02-30', allowed: true, startMinute: 0, endMinute: 1440 }] };
-    expect((await data.admin.put(`/api/groups/${data.groupId}`, { data: invalid })).status()).toBe(400);
 });
 
-test('后台表单：用户、分组规则、场次、预约取消和日志', async ({ data, page, baseURL }, testInfo) => {
+test('后台禁止预约表单支持整天禁止和解除，导航中没有预约时段', async ({ data, page, baseURL }) => {
     await page.context().addCookies([{ name: 'station_session', value: data.tokens[0], url: baseURL! }]);
-    await page.goto('/admin/users');
-    await page.getByLabel('搜索用户').fill(data.users[2].email);
-    await page.getByRole('button', { name: '编辑', exact: true }).click();
-    await page.getByLabel('姓名', { exact: true }).fill('表单更新学员');
-    await page.getByRole('button', { name: '保存用户' }).click();
-    await expect(page.getByRole('status')).toContainText('用户已更新');
-    await expect(page.locator('table')).toContainText('表单更新学员');
+    await page.goto('/admin');
+    await expect(page.getByRole('link', { name: '预约时段', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /预约规则/ })).toHaveCount(0);
     await page.goto('/admin/groups');
-    const group = await db.group.findUniqueOrThrow({ where: { id: data.groupId } });
-    await page.locator('.record-card').filter({ hasText: group.name }).getByRole('button', { name: '编辑权限' }).click();
-    await page.getByRole('button', { name: '添加日期规则' }).click();
-    await page.getByLabel('指定日期').fill('2027-01-01');
-    await page.getByRole('button', { name: '保存分组权限' }).click();
-    await expect(page.getByRole('status')).toContainText('分组权限已保存');
-    expect(await db.groupDateRule.count({ where: { groupId: data.groupId, date: '2027-01-01' } })).toBe(1);
-    await page.goto('/admin/sessions');
-    await page.getByRole('button', { name: '新增预约时段', exact: true }).click();
-    await page.getByRole('combobox', { name: /^已发布布局/ }).selectOption(data.layoutId);
-    const localParts = (value: number) => {
-        const d = new Date(value + 8 * 3600000);
-        return { date: d.toISOString().slice(0, 10), time: d.toISOString().slice(11, 16) };
-    };
-    const start = localParts(Date.parse(data.input.endsAt) + 3600000);
-    const end = localParts(Date.parse(data.input.endsAt) + 7200000);
-    await page.getByLabel('日期', { exact: true }).fill(start.date);
-    await page.getByRole('combobox', { name: /^开始时间/ }).selectOption(start.time);
-    await page.getByLabel('结束日期', { exact: true }).fill(end.date);
-    await page.getByRole('combobox', { name: /^结束时间/ }).selectOption(end.time);
-    await page.getByRole('button', { name: '保存预约时段' }).click();
-    await expect(page.getByRole('status')).toContainText('预约时段已创建');
-    expect(await db.session.count({ where: { layoutId: data.layoutId } })).toBe(2);
-    await cover(data); await book(data);
-    await page.goto('/admin/reservations');
-    await page.getByLabel('筛选预约时段').selectOption(data.sessionId);
-    await expect(page.locator('table').first()).toContainText(data.users[2].studentId);
-    page.once('dialog', d => d.accept());
-    await page.getByRole('row', { name: new RegExp(data.users[2].studentId) }).getByRole('button', { name: '取消预约', exact: true }).click();
-    await expect(page.getByRole('status')).toContainText('预约已取消');
-    expect((await page.request.delete(`/api/reservations/coverage/${(await db.assistantCoverage.findFirstOrThrow({ where: { sessionId: data.sessionId } })).id}`)).ok()).toBeTruthy();
-    await page.goto('/admin/logs');
-    await expect(page.locator('table')).toContainText('取消助教保障');
-    await page.screenshot({ path: testInfo.outputPath('admin-logs.png'), fullPage: true });
-        await testInfo.attach('admin-logs', { path: testInfo.outputPath('admin-logs.png'), contentType: 'image/png' });
+    await expect(page.getByText('页面不存在', { exact: true })).toBeVisible();
+    await page.goto('/admin');
+    await page.getByRole('link', { name: '禁止预约时间', exact: true }).click();
+    await page.getByRole('button', { name: '新增禁止预约时间', exact: true }).click();
+    await page.getByLabel('全天禁止预约').check();
+    const date = new Date(Date.now() + 5 * 86400000).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+    await page.getByLabel('禁止日期').fill(date);
+    await page.getByLabel('原因（选填）').fill('整天设备维护');
+    await page.getByRole('button', { name: '保存禁止预约时间' }).click();
+    await expect(page.getByRole('status')).toContainText('已设置禁止预约时间');
+    const row = page.getByRole('row').filter({ hasText: '整天设备维护' });
+    await expect(row).toBeVisible();
+    const block = await db.bookingBlock.findFirstOrThrow({ where: { createdById: data.users[0].id, reason: '整天设备维护', active: true } });
+    expect(block.endsAt.getTime() - block.startsAt.getTime()).toBe(86400000);
+    expect(block.startsAt.toISOString()).toBe(new Date(`${date}T00:00:00+08:00`).toISOString());
+    page.once('dialog', dialog => dialog.accept());
+    await row.getByRole('button', { name: '解除禁止' }).click();
+    await expect(row).toHaveCount(0);
+    expect((await db.bookingBlock.findUniqueOrThrow({ where: { id: block.id } })).active).toBe(false);
 });
 
 test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点', async ({ data, browser, baseURL }, testInfo) => {
@@ -300,9 +257,14 @@ test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点',
         await page.goto('/');
         const day = new Date(data.input.startsAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
         await page.getByRole('button', { name: `选择日期 ${day}`, exact: true }).tap();
+        await page.getByLabel('场地', { exact: true }).selectOption(`icil-${data.venueId}-${day}`);
+        const slotStart = new Date(data.input.startsAt);
+        const slotEnd = new Date(slotStart.getTime() + 1800000);
+        const slotLabel = `${slotStart.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} 至 ${slotEnd.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}，可预约`;
+        await page.getByRole('button', { name: slotLabel, exact: true }).tap();
         const seat = page.getByRole('button', { name: '座位 T01，可预约', exact: true });
         await seat.focus(); await page.keyboard.press('Enter');
-        await page.getByRole('button', { name: '确认预约', exact: true }).tap();
+        await page.getByRole('button', { name: '预约所选时间', exact: true }).tap();
         const dialog = page.getByRole('dialog');
         await expect(dialog).toBeVisible();
         await expect(dialog.getByRole('button', { name: '再想一下' })).toBeFocused();
@@ -312,7 +274,7 @@ test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点',
         await expect(dialog.getByRole('button', { name: '再想一下' })).toBeFocused();
         await page.keyboard.press('Escape');
         await expect(dialog).not.toBeVisible();
-        await expect(page.getByRole('button', { name: '确认预约', exact: true })).toBeFocused();
+        await expect(page.getByRole('button', { name: '预约所选时间', exact: true })).toBeFocused();
         await page.screenshot({ path: testInfo.outputPath('tablet-booking.png'), fullPage: true });
         await testInfo.attach('tablet-booking', { path: testInfo.outputPath('tablet-booking.png'), contentType: 'image/png' });
         await page.setViewportSize({ width: 390, height: 844 });
@@ -322,7 +284,7 @@ test('平板触屏和窄屏登录退出、座位键盘操作与确认框焦点',
         await page.screenshot({ path: testInfo.outputPath('mobile-booking.png'), fullPage: true });
         await testInfo.attach('mobile-booking', { path: testInfo.outputPath('mobile-booking.png'), contentType: 'image/png' });
         await page.getByRole('button', { name: '退出登录', exact: true }).tap();
-        await expect(page.getByRole('heading', { name: '先选择你的入口。' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: '登录预约空间。' })).toBeVisible();
     } finally { await context.close(); }
 });
 
@@ -337,17 +299,22 @@ test('两个浏览器抢座刷新，失败可重试，取消后座位释放', as
     await b.addCookies([{ name: 'station_session', value: token, url: baseURL! }]);
     const first = await a.newPage(), second = await b.newPage();
     const day = new Date(data.input.startsAt).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+    const slotStart = new Date(data.input.startsAt);
+    const slotEnd = new Date(slotStart.getTime() + 1800000);
+    const slotLabel = `${slotStart.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })} 至 ${slotEnd.toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })}，可预约`;
     try {
         for (const page of [first, second]) {
             await page.goto('/');
             await page.getByRole('button', { name: `选择日期 ${day}`, exact: true }).click();
+            await page.getByLabel('场地', { exact: true }).selectOption(`icil-${data.venueId}-${day}`);
+            await page.getByRole('button', { name: slotLabel, exact: true }).click();
             await page.getByRole('button', { name: '座位 T01，可预约', exact: true }).click();
-            await page.getByRole('button', { name: '确认预约', exact: true }).click();
+            await page.getByRole('button', { name: '预约所选时间', exact: true }).click();
         }
         await first.getByRole('button', { name: '确认，预约这个工位' }).click();
-        await expect(first.getByRole('status')).toContainText('预约成功');
+        await expect(first.getByRole('status')).toContainText('已预约 1 个半小时段');
         await second.getByRole('button', { name: '确认，预约这个工位' }).click();
-        await expect(second.getByRole('status')).toContainText('刚被预约');
+        await expect(second.getByRole('status')).toContainText(/刚被预约|已有其他用户预约/);
         await expect(second.getByRole('button', { name: '座位 T01，已预约', exact: true })).toBeVisible();
         await first.getByRole('main').getByRole('link', { name: '我的预约', exact: true }).click();
         first.once('dialog', d => d.accept());
@@ -355,6 +322,8 @@ test('两个浏览器抢座刷新，失败可重试，取消后座位释放', as
         await expect(first.getByRole('status')).toContainText('预约已取消');
         await second.reload();
         await second.getByRole('button', { name: `选择日期 ${day}`, exact: true }).click();
+        await second.getByLabel('场地', { exact: true }).selectOption(`icil-${data.venueId}-${day}`);
+        await second.getByRole('button', { name: slotLabel, exact: true }).click();
         await expect(second.getByRole('button', { name: '座位 T01，可预约', exact: true })).toBeVisible();
         await second.route('**/api/sessions', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"测试网络失败"}' }));
         await second.reload();
@@ -407,4 +376,40 @@ test('布局画布拖动、缩放、尺寸旋转、多选编号与发布只读',
     await expect(page.getByRole('button', { name: '桌子', exact: true })).not.toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('published-layout.png'), fullPage: true });
     await testInfo.attach('布局发布', { path: testInfo.outputPath('published-layout.png'), contentType: 'image/png' });
+});
+
+test('助教通过相同选座界面预约后，一生一芯对应时间才可预约', async ({ data, browser, baseURL }) => {
+    const staff = await browser.newContext({ baseURL }), member = await browser.newContext({ baseURL });
+    await staff.addCookies([{ name: 'station_session', value: data.tokens[1], url: baseURL! }]);
+    await member.addCookies([{ name: 'station_session', value: data.tokens[2], url: baseURL! }]);
+    const assistant = await staff.newPage(), learner = await member.newPage();
+    const start = new Date(data.input.startsAt), end = new Date(start.getTime() + 1800000);
+    const time = (date: Date) => date.toLocaleTimeString('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' });
+    const day = start.toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+    const label = `${time(start)} 至 ${time(end)}`;
+    const open = async (page: typeof assistant) => {
+        await page.goto('/');
+        await page.getByRole('button', { name: `选择日期 ${day}`, exact: true }).click();
+        await page.getByLabel('场地', { exact: true }).selectOption(`icil-${data.venueId}-${day}`);
+    };
+    try {
+        await open(learner);
+        await expect(learner.getByRole('button', { name: `${label}，不可预约`, exact: true })).toBeDisabled();
+        await open(assistant);
+        await expect(assistant.getByRole('link', { name: '禁止预约时间', exact: true })).toHaveCount(0);
+        await assistant.getByRole('button', { name: `${label}，可预约`, exact: true }).click();
+        await assistant.getByRole('button', { name: '座位 STAFF，助教专用工位，可预约', exact: true }).click();
+        await assistant.getByRole('button', { name: '预约所选时间', exact: true }).click();
+        await assistant.getByRole('button', { name: '确认，预约这个工位', exact: true }).click();
+        await expect(assistant.getByRole('status')).toContainText('已预约 1 个半小时段');
+        await open(learner);
+        await learner.getByRole('button', { name: `${label}，可预约`, exact: true }).click();
+        await learner.getByRole('button', { name: '座位 T01，可预约', exact: true }).click();
+        await learner.getByRole('button', { name: '预约所选时间', exact: true }).click();
+        await learner.getByRole('button', { name: '确认，预约这个工位', exact: true }).click();
+        await expect(learner.getByRole('status')).toContainText('已预约 1 个半小时段');
+        await learner.goto('/my-reservations');
+        await expect(learner.locator('.record-card')).toContainText('T01');
+        await expect(learner.getByText(/打卡/)).toHaveCount(0);
+    } finally { await Promise.all([staff.close(), member.close()]); }
 });

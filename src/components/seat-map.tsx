@@ -1,6 +1,6 @@
 'use client';
 import type { Layout, Session, Seat } from '@/lib/types';
-export default function SeatMap({ layout, session, selected, onSelect, disabled = false, canSelectFixed = false, intervalStart, intervalEnd }: {
+export default function SeatMap({ layout, session, selected, onSelect, disabled = false, canSelectFixed = false, intervalStart, intervalEnd, intervals }: {
     layout: Layout;
     session?: Session;
     selected?: string;
@@ -9,6 +9,7 @@ export default function SeatMap({ layout, session, selected, onSelect, disabled 
     canSelectFixed?: boolean;
     intervalStart?: Date;
     intervalEnd?: Date;
+    intervals?: { startsAt: Date; endsAt: Date }[];
 }) {
     return <svg className="seat-map" viewBox={`0 0 ${layout.width} ${layout.height}`} aria-label="教学场地座位平面图" role="group">
     <defs><pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="0.8" fill="#d8dcd4"/></pattern></defs>
@@ -24,9 +25,12 @@ export default function SeatMap({ layout, session, selected, onSelect, disabled 
             const booking = session?.reservations.find(r => {
                 if (r.seatId !== seat.id)
                     return false;
-                if (!intervalStart || !intervalEnd || !r.startsAt || !r.endsAt)
+                if ((!intervalStart || !intervalEnd) && !intervals?.length || !r.startsAt || !r.endsAt)
                     return true;
-                return new Date(r.startsAt) < intervalEnd && new Date(r.endsAt) > intervalStart;
+                const startsAt = new Date(r.startsAt), endsAt = new Date(r.endsAt);
+                return intervals?.length
+                    ? intervals.some(interval => startsAt < interval.endsAt && endsAt > interval.startsAt)
+                    : startsAt < intervalEnd! && endsAt > intervalStart!;
             });
             const fixedBlocked = seat.fixedForAssistant && !canSelectFixed;
             const state = !seat.enabled || fixedBlocked ? 'disabled' : booking?.mine ? 'mine' : booking ? 'booked' : selected === seat.id ? 'selected' : 'available';

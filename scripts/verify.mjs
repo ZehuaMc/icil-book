@@ -16,7 +16,7 @@ if (!existsSync('node_modules/.bin/prisma')) {
     process.exit(1);
 }
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-for (const step of ['db:generate', 'db:validate', 'db:migrate', 'db:seed', 'typecheck', 'test', 'test:api', 'test:database', 'test:integration', 'build', 'test:e2e']) {
+for (const step of ['db:generate', 'db:validate', 'db:init', 'db:seed', 'typecheck', 'test', 'test:api', 'test:database', 'test:integration', 'test:notifications', 'build', 'test:e2e']) {
     console.log(`\n>>> ${step}`);
     const code = await new Promise((resolve, reject) => {
         const child = spawn(npm, ['run', step], { stdio: 'inherit', env: { ...process.env, E2E_SERVER_COMMAND: 'npm start', COOKIE_SECURE: 'false' } });
@@ -25,4 +25,4 @@ for (const step of ['db:generate', 'db:validate', 'db:migrate', 'db:seed', 'type
     });
     if (code) process.exit(code);
 }
-console.log('\n完整验证通过：数据库迁移、种子、类型、规则、并发、生产构建与浏览器流程。');
+console.log('\n完整验证通过：数据库初始化、种子、类型、规则、并发、取消通知、生产构建与浏览器流程。');

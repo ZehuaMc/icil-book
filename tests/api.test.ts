@@ -4,6 +4,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 
+assert.ok(process.env.DATABASE_URL, 'DATABASE_URL 未设置：请配置并初始化专用测试数据库');
+
 // Next initializes this global before loading its request storage when running a server.
 Object.assign(globalThis, { AsyncLocalStorage });
 const { NextRequest } = await import('next/server');
@@ -14,6 +16,7 @@ const { workAsyncStorage } = require('next/dist/server/app-render/work-async-sto
 const { createWorkStore } = require('next/dist/server/async-storage/work-store.js') as typeof import('next/dist/server/async-storage/work-store.js');
 const route = await import('../src/app/api/[...path]/route');
 const { db } = await import('../src/lib/db');
+const { localParts } = await import('../src/lib/rules');
 
 async function call(path: string, method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET', raw?: string, headers?: HeadersInit) {
     const request = new NextRequest(`http://localhost:3000/api/${path}`, { method, body: raw, headers });
@@ -29,18 +32,24 @@ test('当前用户接口在没有登录 Cookie 时返回 null', async () => {
     assert.equal(response.headers.get('cache-control'), 'no-store');
 });
 test('后台、个人记录和写接口拒绝未登录请求', async () => {
-    for (const path of ['admin/users', 'admin/stats', 'admin/reservations', 'admin/users/example/reset-password', 'admin/sessions/example/admin-seat', 'auth/change-password', 'groups', 'layouts', 'reservations']) {
+    for (const path of ['admin/users', 'admin/stats', 'admin/reservations', 'admin/booking-blocks', 'admin/logs', 'layouts', 'reservations', 'notifications']) {
         const response = await call(path);
         assert.equal(response.status, 401, path);
     }
     const response = await call('reservations', 'POST', JSON.stringify({ sessionId: 'test', seatId: 'test' }));
     assert.equal(response.status, 401);
 });
-test('登录注册输入错误返回 400，不触及数据库', async () => {
-    for (const [path, data, expected] of [['auth/login', { studentId: 'ab', password: 'x' }, 400], ['auth/register', { studentId: 'valid001', name: '测试用户', password: 'short' }, 400], ['auth/register', { studentId: 'valid001', name: '测试用户', password: 'long-enough-password', role: 'ADMIN' }, 403]] as const) {
-        const response = await call(path, 'POST', JSON.stringify(data));
-        assert.equal(response.status, expected);
-        assert.equal(typeof (await response.json()).error, 'string');
+test('登录注册拒绝非法学号、短密码和管理员注册', async () => {
+    const studentId = `invalid${randomUUID().replaceAll('-', '').slice(0, 12)}`;
+    const { hashToken } = await import('../src/lib/auth');
+    try {
+        for (const [path, data, expected] of [['auth/login', { studentId: 'ab', password: 'x' }, 400], ['auth/register', { studentId, name: '测试用户', password: 'short' }, 400], ['auth/register', { studentId, name: '测试用户', password: 'long-enough-password', role: 'ADMIN' }, 403]] as const) {
+            const response = await call(path, 'POST', JSON.stringify(data));
+            assert.equal(response.status, expected);
+            assert.equal(typeof (await response.json()).error, 'string');
+        }
+    } finally {
+        await db.loginAttempt.deleteMany({ where: { key: `auth/register:${hashToken(studentId)}` } });
     }
 });
 test('路由层对非法 JSON、跨站写入与过大流式请求返回对应错误', async () => {
@@ -52,99 +61,6 @@ test('没有会话的退出请求可安全重复执行', async () => {
     const response = await call('auth/logout', 'POST');
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
-});
-test('管理员开放重叠时段时合并时间并保留两边预约', async () => {
-    const { hashToken } = await import('../src/lib/auth');
-    const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
-    const group = await db.group.create({ data: { name: `merge-test-${suffix}` } });
-    const admin = await db.user.create({ data: { name: '合并测试管理员', studentId: `ma${suffix}`, email: `ma${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
-    const otherAdmin = await db.user.create({ data: { name: '另一个管理员', studentId: `mb${suffix}`, email: `mb${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
-    const venue = await db.venue.create({ data: { name: `merge-venue-${suffix}`, location: 'test' } });
-    const layout = await db.layoutVersion.create({ data: { name: `merge-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }] } }, include: { seats: true } });
-    const day = new Date(Date.now() + 3 * 86400000);
-    day.setUTCHours(0, 0, 0, 0);
-    const startsAt = new Date(day.getTime() + 2 * 3600000), overlapStart = new Date(day.getTime() + 4 * 3600000), firstEnd = new Date(day.getTime() + 6 * 3600000), endsAt = new Date(day.getTime() + 9 * 3600000);
-    const target = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt: firstEnd, open: false } });
-    const existing = await db.session.create({ data: { layoutId: layout.id, startsAt: overlapStart, endsAt, open: true } });
-    const reservationStart = new Date(day.getTime() + 4 * 3600000), reservationEnd = new Date(day.getTime() + 5 * 3600000);
-    await db.reservation.create({ data: { sessionId: target.id, seatId: layout.seats[0].id, userId: admin.id, startsAt, endsAt: firstEnd } });
-    await db.reservation.create({ data: { sessionId: existing.id, seatId: layout.seats[0].id, userId: admin.id, startsAt: reservationStart, endsAt: reservationEnd } });
-    await db.reservation.create({ data: { sessionId: existing.id, seatId: layout.seats[1].id, userId: otherAdmin.id, startsAt: reservationStart, endsAt: reservationEnd } });
-    const token = randomUUID();
-    await db.authSession.create({ data: { id: hashToken(token), userId: admin.id, expiresAt: new Date(Date.now() + 60000) } });
-    try {
-        const response = await call(`admin/sessions/${target.id}/ready`, 'POST', '{}', { cookie: `station_session=${token}` });
-        assert.equal(response.status, 200, await response.clone().text());
-        const merged = await db.session.findUniqueOrThrow({ where: { id: target.id } });
-        assert.equal(merged.startsAt.getTime(), startsAt.getTime());
-        assert.equal(merged.endsAt.getTime(), endsAt.getTime());
-        assert.equal(merged.open, true);
-        assert.equal(await db.session.count({ where: { id: existing.id, open: true } }), 1);
-        assert.equal(await db.reservation.count({ where: { sessionId: target.id, cancelledAt: null } }), 1);
-        assert.equal(await db.reservation.count({ where: { sessionId: existing.id, cancelledAt: null } }), 2);
-        assert.equal(await db.reservation.count({ where: { sessionId: existing.id, userId: admin.id, cancelledAt: null } }), 1);
-    }
-    finally {
-        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, otherAdmin.id] } } });
-        await db.reservation.deleteMany({ where: { sessionId: { in: [target.id, existing.id] } } });
-        await db.session.deleteMany({ where: { id: { in: [target.id, existing.id] } } });
-        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, otherAdmin.id] } } });
-        await db.user.deleteMany({ where: { id: { in: [admin.id, otherAdmin.id] } } });
-        await db.layoutVersion.delete({ where: { id: layout.id } });
-        await db.venue.delete({ where: { id: venue.id } });
-        await db.group.delete({ where: { id: group.id } });
-    }
-});
-test('管理员暂停时释放YSYX预约，随后可以更换工位', async () => {
-    const { hashToken } = await import('../src/lib/auth');
-    const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
-    const group = await db.group.create({ data: { name: `seat-change-${suffix}`, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
-    const admin = await db.user.create({ data: { name: '换座管理员', studentId: `sa${suffix}`, email: `sa${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
-    const assistant = await db.user.create({ data: { name: '换座助教', studentId: `st${suffix}`, email: `st${suffix}@test.local`, passwordHash: 'unused', role: 'ASSISTANT', groupId: group.id } });
-    const learner = await db.user.create({ data: { name: '换座学员', studentId: `su${suffix}`, email: `su${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
-    const venue = await db.venue.create({ data: { name: `seat-change-venue-${suffix}`, location: 'test' } });
-    const layout = await db.layoutVersion.create({ data: { name: `seat-change-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }, { code: 'A03', x: 30, y: 10 }] } }, include: { seats: true } });
-    const startsAt = new Date(Date.now() + 86400000), endsAt = new Date(Date.now() + 86400000 + 2 * 3600000);
-    const session = await db.session.create({ data: { layoutId: layout.id, startsAt, endsAt, open: false } });
-    await db.assistantCoverage.create({ data: { sessionId: session.id, assistantId: assistant.id } });
-    const adminToken = randomUUID(), learnerToken = randomUUID();
-    try {
-        const expiresAt = new Date(Date.now() + 60000);
-        await db.authSession.createMany({ data: [{ id: hashToken(adminToken), userId: admin.id, expiresAt }, { id: hashToken(learnerToken), userId: learner.id, expiresAt }] });
-        const firstSeat = await call(`admin/sessions/${session.id}/admin-seat`, 'PUT', JSON.stringify({ seatId: layout.seats[0].id }), { cookie: `station_session=${adminToken}` });
-        assert.equal(firstSeat.status, 200, await firstSeat.clone().text());
-        const secondSeat = await call(`admin/sessions/${session.id}/admin-seat`, 'PUT', JSON.stringify({ seatId: layout.seats[1].id }), { cookie: `station_session=${adminToken}` });
-        assert.equal(secondSeat.status, 200, await secondSeat.clone().text());
-        assert.equal(await db.reservation.count({ where: { sessionId: session.id, userId: admin.id, cancelledAt: null } }), 1);
-        assert.equal(await db.reservation.count({ where: { sessionId: session.id, userId: admin.id, cancelledAt: { not: null } } }), 1);
-
-        const opened = await call(`admin/sessions/${session.id}/ready`, 'POST', '{}', { cookie: `station_session=${adminToken}` });
-        assert.equal(opened.status, 200, await opened.clone().text());
-        const learnerBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: session.id, seatId: layout.seats[0].id, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() }), { cookie: `station_session=${learnerToken}` });
-        assert.equal(learnerBooking.status, 200, await learnerBooking.clone().text());
-        const blockedChange = await call(`admin/sessions/${session.id}/admin-seat`, 'PUT', JSON.stringify({ seatId: layout.seats[0].id }), { cookie: `station_session=${adminToken}` });
-        assert.equal(blockedChange.status, 409);
-
-        const paused = await call(`admin/sessions/${session.id}/ready`, 'DELETE', '{}', { cookie: `station_session=${adminToken}` });
-        assert.equal(paused.status, 200, await paused.clone().text());
-        const changed = await call(`admin/sessions/${session.id}/admin-seat`, 'PUT', JSON.stringify({ seatId: layout.seats[2].id }), { cookie: `station_session=${adminToken}` });
-        assert.equal(changed.status, 200, await changed.clone().text());
-        assert.equal(await db.reservation.count({ where: { sessionId: session.id, userId: learner.id, cancelledAt: null } }), 0);
-        assert.equal(await db.reservation.count({ where: { sessionId: session.id, userId: learner.id, cancelledAt: { not: null } } }), 1);
-        assert.equal(await db.notification.count({ where: { recipientId: learner.id, message: { contains: '管理员暂停' } } }), 1);
-        assert.equal((await db.session.findUniqueOrThrow({ where: { id: session.id } })).open, false);
-    }
-    finally {
-        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, assistant.id, learner.id] } } });
-        await db.assistantCoverage.deleteMany({ where: { sessionId: session.id } });
-        await db.reservation.deleteMany({ where: { sessionId: session.id } });
-        await db.session.delete({ where: { id: session.id } });
-        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, assistant.id, learner.id] } } });
-        await db.user.deleteMany({ where: { id: { in: [admin.id, assistant.id, learner.id] } } });
-        await db.layoutVersion.delete({ where: { id: layout.id } });
-        await db.venue.delete({ where: { id: venue.id } });
-        await db.group.delete({ where: { id: group.id } });
-    }
 });
 test('覆盖布局时只改座位权限不会删除原有家具', async () => {
     const { hashToken } = await import('../src/lib/auth');
@@ -184,16 +100,16 @@ test('覆盖布局时只改座位权限不会删除原有家具', async () => {
         await db.group.delete({ where: { id: group.id } });
     }
 });
-test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的区间不可预约', async () => {
+test('自动日期入口执行助教完整覆盖检查，ICIL可直接预约并受禁止时间限制', async () => {
     const { hashToken } = await import('../src/lib/auth');
     const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
-    const group = await db.group.create({ data: { name: `member-rule-${suffix}`, canReserve: false } });
+    const group = await db.group.create({ data: { name: `member-rule-${suffix}` } });
     const admin = await db.user.create({ data: { name: '时段管理员', studentId: `ad${suffix}`, email: `ad${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
     const assistant = await db.user.create({ data: { name: '时段助教', studentId: `at${suffix}`, email: `at${suffix}@test.local`, passwordHash: 'unused', role: 'ASSISTANT', groupId: group.id } });
     const icil = await db.user.create({ data: { name: 'ICIL成员', studentId: `ic${suffix}`, email: `ic${suffix}@test.local`, passwordHash: 'unused', role: 'USER', memberType: 'ICIL', groupId: group.id } });
     const ysyx = await db.user.create({ data: { name: 'YSYX成员', studentId: `ys${suffix}`, email: `ys${suffix}@test.local`, passwordHash: 'unused', role: 'USER', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `member-venue-${suffix}`, location: 'test' } });
-    const layout = await db.layoutVersion.create({ data: { name: `member-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }] } }, include: { seats: true } });
+    const layout = await db.layoutVersion.create({ data: { name: `member-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 40, y: 10 }] } }, include: { seats: true } });
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
@@ -201,7 +117,7 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
     const adminSession = await db.session.create({ data: { layoutId: layout.id, startsAt: adminSlotStart, endsAt: adminSlotEnd, open: false } });
     await db.reservation.create({ data: { sessionId: adminSession.id, seatId: layout.seats[0].id, userId: assistant.id, startsAt: adminSlotStart, endsAt: adminSlotEnd } });
     const icilToken = randomUUID(), ysyxToken = randomUUID(), adminToken = randomUUID();
-    let icilSessionId = '';
+    let icilSessionId = '', ysyxSessionId = '';
     try {
         const expiresAt = new Date(Date.now() + 60_000);
         await db.authSession.createMany({ data: [{ id: hashToken(icilToken), userId: icil.id, expiresAt }, { id: hashToken(ysyxToken), userId: ysyx.id, expiresAt }, { id: hashToken(adminToken), userId: admin.id, expiresAt }] });
@@ -215,23 +131,38 @@ test('ICIL全天预约不受管理员开放时段限制，但管理员禁用的�
         assert.ok(!icilData.sessions.some((item: { id: string }) => item.id === adminSession.id));
         const ysyxSessions = await call('sessions', 'GET', undefined, { cookie: `station_session=${ysyxToken}` });
         assert.equal(ysyxSessions.status, 200);
-        assert.ok(!(await ysyxSessions.json()).sessions.some((item: { id: string }) => item.id === icilSessionId || item.id === adminSession.id));
-        const startsAt = new Date(`${date}T13:17:00+08:00`), endsAt = new Date(`${date}T13:43:00+08:00`);
+        const ysyxData = await ysyxSessions.json();
+        const ysyxDaySession = ysyxData.sessions.find((item: { icilOnly: boolean; layoutId: string; startsAt: string }) => item.icilOnly && item.layoutId === layout.id && new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(item.startsAt)) === date);
+        assert.ok(ysyxDaySession);
+        ysyxSessionId = ysyxDaySession.id;
+        assert.ok(!ysyxData.sessions.some((item: { id: string }) => item.id === adminSession.id));
+        const offGridStart = new Date(`${date}T13:17:00+08:00`), offGridEnd = new Date(`${date}T13:47:00+08:00`);
+        const offGridBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: icilSessionId, seatId: layout.seats[0].id, startsAt: offGridStart.toISOString(), endsAt: offGridEnd.toISOString() }), { cookie: `station_session=${icilToken}` });
+        assert.equal(offGridBooking.status, 400);
+        const startsAt = new Date(`${date}T13:30:00+08:00`), endsAt = new Date(`${date}T14:30:00+08:00`);
         const icilBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: icilSessionId, seatId: layout.seats[0].id, startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() }), { cookie: `station_session=${icilToken}` });
         assert.equal(icilBooking.status, 200, await icilBooking.clone().text());
-        const ysyxStart = new Date(`${date}T10:17:00+08:00`), ysyxEnd = new Date(`${date}T10:43:00+08:00`);
-        const ysyxBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: adminSession.id, seatId: layout.seats[0].id, startsAt: ysyxStart.toISOString(), endsAt: ysyxEnd.toISOString() }), { cookie: `station_session=${ysyxToken}` });
+        const secondBooking = await call('reservations/batch', 'POST', JSON.stringify({ sessionId: icilSessionId, seatId: layout.seats[1].id, slots: [
+            { startsAt: new Date(`${date}T15:00:00+08:00`).toISOString(), endsAt: new Date(`${date}T15:30:00+08:00`).toISOString() },
+            { startsAt: new Date(`${date}T16:00:00+08:00`).toISOString(), endsAt: new Date(`${date}T16:30:00+08:00`).toISOString() },
+        ] }), { cookie: `station_session=${icilToken}` });
+        assert.equal(secondBooking.status, 200, await secondBooking.clone().text());
+        const ysyxStart = new Date(`${date}T11:30:00+08:00`), ysyxEnd = new Date(`${date}T12:00:00+08:00`);
+        const ysyxBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: ysyxDaySession.id, seatId: layout.seats[1].id, startsAt: ysyxStart.toISOString(), endsAt: ysyxEnd.toISOString() }), { cookie: `station_session=${ysyxToken}` });
         assert.equal(ysyxBooking.status, 403, await ysyxBooking.clone().text());
-        const blockedStart = new Date(`${date}T11:17:00+08:00`), blockedEnd = new Date(`${date}T11:43:00+08:00`);
+        const coveredBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: ysyxDaySession.id, seatId: layout.seats[1].id, startsAt: adminSlotStart.toISOString(), endsAt: adminSlotEnd.toISOString() }), { cookie: `station_session=${ysyxToken}` });
+        assert.equal(coveredBooking.status, 200, await coveredBooking.clone().text());
+        const blockedStart = new Date(`${date}T11:30:00+08:00`), blockedEnd = new Date(`${date}T12:00:00+08:00`);
         await db.bookingBlock.create({ data: { kind: 'SESSION', startsAt: blockedStart, endsAt: blockedEnd, sessionId: adminSession.id, reason: '管理员禁用', createdById: admin.id } });
         const blockedBooking = await call('reservations', 'POST', JSON.stringify({ sessionId: icilSessionId, seatId: layout.seats[0].id, startsAt: blockedStart.toISOString(), endsAt: blockedEnd.toISOString() }), { cookie: `station_session=${icilToken}` });
         assert.equal(blockedBooking.status, 403, await blockedBooking.clone().text());
     }
     finally {
         await db.authSession.deleteMany({ where: { userId: { in: [admin.id, assistant.id, icil.id, ysyx.id] } } });
-        await db.reservation.deleteMany({ where: { sessionId: { in: [icilSessionId, adminSession.id] } } });
+        await db.reservation.deleteMany({ where: { sessionId: { in: [icilSessionId, ysyxSessionId, adminSession.id] } } });
         await db.bookingBlock.deleteMany({ where: { sessionId: adminSession.id } });
         if (icilSessionId) await db.session.delete({ where: { id: icilSessionId } });
+        if (ysyxSessionId && ysyxSessionId !== icilSessionId) await db.session.delete({ where: { id: ysyxSessionId } });
         await db.session.delete({ where: { id: adminSession.id } });
         await db.session.deleteMany({ where: { layoutId: layout.id, icilOnly: true } });
         await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, icil.id, ysyx.id] } } });
@@ -310,11 +241,12 @@ test('暂停时段且没有有效预约后可以删除关联布局', async () =>
         await db.group.delete({ where: { id: group.id } });
     }
 });
-test('ICIL成员改回YSYX后没有管理员值守的预约会自动释放', async () => {
+test('ICIL改回YSYX后，仅保留有助教完整预约覆盖的记录', async () => {
     const { hashToken } = await import('../src/lib/auth');
     const suffix = randomUUID().replaceAll('-', '').slice(0, 18);
-    const group = await db.group.create({ data: { name: `downgrade-${suffix}`, canReserve: true, weeklyRules: { create: Array.from({ length: 7 }, (_, weekday) => ({ weekday, startMinute: 0, endMinute: 1440 })) } } });
+    const group = await db.group.create({ data: { name: `downgrade-${suffix}` } });
     const admin = await db.user.create({ data: { name: '降级管理员', studentId: `da${suffix}`, email: `da${suffix}@test.local`, passwordHash: 'unused', role: 'ADMIN', groupId: group.id } });
+    const assistant = await db.user.create({ data: { name: '降级测试助教', studentId: `dt${suffix}`, email: `dt${suffix}@test.local`, passwordHash: 'unused', role: 'ASSISTANT', groupId: group.id } });
     const member = await db.user.create({ data: { name: '降级成员', studentId: `dm${suffix}`, email: `dm${suffix}@test.local`, passwordHash: 'unused', role: 'USER', memberType: 'ICIL', groupId: group.id } });
     const venue = await db.venue.create({ data: { name: `downgrade-venue-${suffix}`, location: 'test' } });
     const layout = await db.layoutVersion.create({ data: { name: `downgrade-layout-${suffix}`, venueId: venue.id, status: 'PUBLISHED', seats: { create: [{ code: 'A01', x: 10, y: 10 }, { code: 'A02', x: 20, y: 10 }] } }, include: { seats: true } });
@@ -324,12 +256,12 @@ test('ICIL成员改回YSYX后没有管理员值守的预约会自动释放', asy
     await db.reservation.createMany({ data: [
         { sessionId: staffed.id, seatId: layout.seats[0].id, userId: member.id, startsAt: start, endsAt: end },
         { sessionId: unstaffed.id, seatId: layout.seats[1].id, userId: member.id, startsAt: new Date(start.getTime() + 2 * 3600000), endsAt: new Date(end.getTime() + 2 * 3600000) },
-        { sessionId: staffed.id, seatId: layout.seats[1].id, userId: admin.id, startsAt: start, endsAt: end },
+        { sessionId: staffed.id, seatId: layout.seats[1].id, userId: assistant.id, startsAt: start, endsAt: end },
     ] });
     const token = randomUUID();
     try {
         await db.authSession.create({ data: { id: hashToken(token), userId: admin.id, expiresAt: new Date(Date.now() + 60000) } });
-        const response = await call(`admin/users/${member.id}`, 'PATCH', JSON.stringify({ name: member.name, role: 'USER', memberType: 'YSYX', enabled: true, groupId: group.id }), { cookie: `station_session=${token}` });
+        const response = await call(`admin/users/${member.id}`, 'PATCH', JSON.stringify({ name: member.name, role: 'USER', memberType: 'YSYX', enabled: true }), { cookie: `station_session=${token}` });
         assert.equal(response.status, 200, await response.clone().text());
         assert.equal(await db.reservation.count({ where: { sessionId: staffed.id, userId: member.id, cancelledAt: null } }), 1);
         assert.equal(await db.reservation.count({ where: { sessionId: unstaffed.id, userId: member.id, cancelledAt: null } }), 0);
@@ -337,12 +269,12 @@ test('ICIL成员改回YSYX后没有管理员值守的预约会自动释放', asy
         assert.equal(await db.notification.count({ where: { recipientId: member.id, type: 'BOOKING_CANCELLED' } }), 1);
     }
     finally {
-        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, member.id] } } });
+        await db.authSession.deleteMany({ where: { userId: { in: [admin.id, assistant.id, member.id] } } });
         await db.notification.deleteMany({ where: { recipientId: member.id } });
         await db.reservation.deleteMany({ where: { sessionId: { in: [staffed.id, unstaffed.id] } } });
         await db.session.deleteMany({ where: { id: { in: [staffed.id, unstaffed.id] } } });
-        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, member.id] } } });
-        await db.user.deleteMany({ where: { id: { in: [admin.id, member.id] } } });
+        await db.auditLog.deleteMany({ where: { actorId: { in: [admin.id, assistant.id, member.id] } } });
+        await db.user.deleteMany({ where: { id: { in: [admin.id, assistant.id, member.id] } } });
         await db.layoutVersion.delete({ where: { id: layout.id } });
         await db.venue.delete({ where: { id: venue.id } });
         await db.group.delete({ where: { id: group.id } });
@@ -394,12 +326,9 @@ test('已注销的学员可用相同学号重新注册并登录，管理员不�
     const prefix = randomUUID().replaceAll('-', '').slice(0, 12);
     const { db } = await import('../src/lib/db');
     const { hashToken } = await import('../src/lib/auth');
-    const previousSettings = await db.appSetting.findUnique({ where: { id: 'main' } });
-    const group = await db.group.create({ data: { name: `reregister-${prefix}` } });
     const roles = ['USER'] as const;
     const accounts: { id: string; studentId: string; role: typeof roles[number] }[] = [];
     try {
-        await db.appSetting.upsert({ where: { id: 'main' }, create: { id: 'main', defaultGroupId: group.id }, update: { defaultGroupId: group.id } });
         for (const role of roles) {
             const studentId = `rr${prefix}u`;
             const firstPassword = 'before-delete-password';
@@ -409,6 +338,8 @@ test('已注销的学员可用相同学号重新注册并登录，管理员不�
             const first = await call('auth/register', 'POST', JSON.stringify(payload('注销前账号', firstPassword)));
             assert.equal(first.status, 200, role);
             const original = (await first.json()).user;
+            assert.equal('group' in original, false);
+            assert.equal((await db.user.findUniqueOrThrow({ where: { id: original.id } })).groupId, null);
             accounts.push({ id: original.id, studentId, role });
             await db.authSession.deleteMany({ where: { userId: original.id } });
             await db.user.update({ where: { id: original.id }, data: { enabled: false, deletedAt: new Date() } });
@@ -421,7 +352,7 @@ test('已注销的学员可用相同学号重新注册并登录，管理员不�
             assert.equal(renewedUser.deletedAt, null);
             assert.equal(renewedUser.name, '重新注册账号');
 
-            const login = await call('auth/login', 'POST', JSON.stringify({ studentId, role, password: nextPassword }));
+            const login = await call('auth/login', 'POST', JSON.stringify({ studentId, password: nextPassword }));
             assert.equal(login.status, 200, role);
             assert.equal((await login.json()).user.id, original.id);
             await db.authSession.deleteMany({ where: { userId: original.id } });
@@ -430,21 +361,173 @@ test('已注销的学员可用相同学号重新注册并登录，管理员不�
     finally {
         await db.authSession.deleteMany({ where: { userId: { in: accounts.map(a => a.id) } } });
         for (const account of accounts) {
-            const roleName = account.role;
-            const limiterKeys = ['auth/register', 'auth/login'].map(key => `${key}:${roleName}:${hashToken(account.studentId)}`);
+            const limiterKeys = ['auth/register', 'auth/login'].map(key => `${key}:${hashToken(account.studentId)}`);
             await db.loginAttempt.deleteMany({ where: { key: { in: limiterKeys } } });
         }
         await db.user.deleteMany({ where: { id: { in: accounts.map(a => a.id) } } });
-        if (previousSettings)
-            await db.appSetting.update({ where: { id: 'main' }, data: { defaultGroupId: previousSettings.defaultGroupId } });
-        else
-            await db.appSetting.deleteMany({ where: { id: 'main' } });
-        await db.group.delete({ where: { id: group.id } });
-        await db.$disconnect();
     }
 });
 test('管理员注册入口始终关闭', async () => {
-    const response = await call('auth/register', 'POST', JSON.stringify({ studentId: `newadmin${randomUUID().slice(0, 8)}`, name: '非法管理员', role: 'ADMIN', password: 'long-enough-password' }));
-    assert.equal(response.status, 403);
+    const { hashToken } = await import('../src/lib/auth');
+    const studentId = `newadmin${randomUUID().slice(0, 8)}`;
+    try {
+        const response = await call('auth/register', 'POST', JSON.stringify({ studentId, name: '非法管理员', role: 'ADMIN', password: 'long-enough-password' }));
+        assert.equal(response.status, 403);
+        assert.equal(await db.user.count({ where: { studentId } }), 0);
+    } finally {
+        await db.loginAttempt.deleteMany({ where: { key: `auth/register:${hashToken(studentId)}` } });
+    }
 });
+test('所有角色统一登录且不依赖客户端身份，旧同学号账号按密码识别', async () => {
+    const { hash } = await import('bcryptjs');
+    const { hashToken } = await import('../src/lib/auth');
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
+    const group = await db.group.create({ data: { name: `unified-login-${suffix}` } });
+    const accounts = [];
+    try {
+        for (const [i, role] of (['USER', 'ASSISTANT', 'ADMIN'] as const).entries()) {
+            const password = `unified-password-${i}`;
+            const account = await db.user.create({ data: { name: role, studentId: `un${suffix}`, email: `${suffix}${i}@test.local`, role, groupId: group.id, passwordHash: await hash(password, 4) } });
+            accounts.push(account);
+            const response = await call('auth/login', 'POST', JSON.stringify({ studentId: account.studentId, password }));
+            assert.equal(response.status, 200, await response.clone().text());
+            assert.equal((await response.json()).user.role, role);
+        }
+        const wrong = await call('auth/login', 'POST', JSON.stringify({ studentId: accounts[0].studentId, password: 'wrong' }));
+        assert.equal(wrong.status, 401);
+        const blockedRegistration = await call('auth/register', 'POST', JSON.stringify({ studentId: accounts[0].studentId, name: 'duplicate', password: 'password-duplicate-123' }));
+        assert.equal(blockedRegistration.status, 409);
+    } finally {
+        await db.authSession.deleteMany({ where: { userId: { in: accounts.map(account => account.id) } } });
+        await db.loginAttempt.deleteMany({ where: { key: { in: ['auth/login', 'auth/register'].map(key => `${key}:${hashToken(`un${suffix}`)}`) } } });
+        await db.user.deleteMany({ where: { groupId: group.id } });
+        await db.group.delete({ where: { id: group.id } });
+    }
+});
+
+test('通知仅对接收者可见，单条和全部已读不能修改其他用户的通知', async () => {
+    const { hashToken } = await import('../src/lib/auth');
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
+    const users = await Promise.all([0, 1].map(i => db.user.create({ data: { name: `通知成员${i}`, studentId: `nt${suffix}${i}`, email: `nt${suffix}${i}@test.local`, passwordHash: 'unused' } })));
+    const tokens = [randomUUID(), randomUUID()];
+    const headers = { cookie: `station_session=${tokens[0]}` };
+    try {
+        await db.authSession.createMany({ data: users.map((user, i) => ({ id: hashToken(tokens[i]), userId: user.id, expiresAt: new Date(Date.now() + 3600000) })) });
+        const first = await db.notification.create({ data: { recipientId: users[0].id, message: '工位预约已取消' } });
+        const second = await db.notification.create({ data: { recipientId: users[0].id, message: '另一工位预约已取消' } });
+        const other = await db.notification.create({ data: { recipientId: users[1].id, message: '其他成员的通知' } });
+        const response = await call('notifications', 'GET', undefined, headers);
+        assert.equal(response.status, 200);
+        const result = await response.json();
+        assert.equal(result.unreadCount, 2);
+        assert.deepEqual(result.notifications.map((item: { id: string }) => item.id).sort(), [first.id, second.id].sort());
+        assert.equal((await call(`notifications/${other.id}`, 'PATCH', '{}', headers)).status, 404);
+        assert.equal((await call(`notifications/${first.id}`, 'PATCH', '{}', headers)).status, 200);
+        assert.equal((await call(`notifications/${first.id}`, 'PATCH', '{}', headers)).status, 200);
+        assert.equal((await (await call('notifications', 'GET', undefined, headers)).json()).unreadCount, 1);
+        assert.equal((await call('notifications/read-all', 'POST', '{}', headers)).status, 200);
+        assert.equal((await (await call('notifications', 'GET', undefined, headers)).json()).unreadCount, 0);
+        assert.equal((await db.notification.findUniqueOrThrow({ where: { id: other.id } })).readAt, null);
+    } finally {
+        await db.user.deleteMany({ where: { id: { in: users.map(user => user.id) } } });
+    }
+});
+
+test('助教降级、停用或注销后取消失去覆盖的一生一芯预约，保留ICIL', async t => {
+    const { hashToken } = await import('../src/lib/auth');
+    const { reserveSeat } = await import('../src/lib/bookings');
+    for (const action of ['降级', '停用', '注销'] as const) await t.test(action, async () => {
+        const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
+        const users = await Promise.all((['ADMIN', 'ASSISTANT', 'USER', 'USER'] as const).map((role, i) => db.user.create({ data: { name: `${action}${role}`, studentId: `lc${suffix}${i}`, email: `lc${suffix}${i}@test.local`, role, memberType: i === 3 ? 'ICIL' : 'YSYX', passwordHash: 'unused' } })));
+        const [admin, assistant, learner, icil] = users;
+        const userIds = users.map(user => user.id);
+        const venue = await db.venue.create({ data: { name: suffix, location: 'test' } });
+        const layout = await db.layoutVersion.create({ data: { name: suffix, venueId: venue.id, status: 'PUBLISHED', seats: { create: ['STAFF', 'YSYX', 'ICIL'].map((code, i) => ({ code, x: i * 50, y: 100, fixedForAssistant: i === 0 })) } }, include: { seats: true } });
+        const tomorrow = localParts(new Date(Date.now() + 86400000)).date;
+        const session = await db.session.create({ data: { layoutId: layout.id, startsAt: new Date(`${tomorrow}T09:00:00+08:00`), endsAt: new Date(`${tomorrow}T10:00:00+08:00`) } });
+        const token = randomUUID();
+        const seat = (code: string) => layout.seats.find(item => item.code === code)!.id;
+        try {
+            await db.authSession.create({ data: { id: hashToken(token), userId: admin.id, expiresAt: new Date(Date.now() + 3600000) } });
+            await reserveSeat(assistant.id, session.id, seat('STAFF'));
+            const affected = await reserveSeat(learner.id, session.id, seat('YSYX'));
+            const preserved = await reserveSeat(icil.id, session.id, seat('ICIL'));
+            const method = action === '注销' ? 'DELETE' : 'PATCH';
+            const payload = action === '注销' ? undefined : JSON.stringify({ name: assistant.name, role: action === '降级' ? 'USER' : 'ASSISTANT', enabled: action !== '停用' });
+            const response = await call(`admin/users/${assistant.id}`, method, payload, { cookie: `station_session=${token}` });
+            assert.equal(response.status, 200, await response.clone().text());
+            assert.ok((await db.reservation.findUniqueOrThrow({ where: { id: affected.id } })).cancelledAt);
+            assert.equal((await db.reservation.findUniqueOrThrow({ where: { id: preserved.id } })).cancelledAt, null);
+            assert.equal(await db.notification.count({ where: { recipientId: learner.id } }), 1);
+            assert.equal(await db.notification.count({ where: { recipientId: icil.id } }), 0);
+            assert.equal((await db.session.findUniqueOrThrow({ where: { id: session.id } })).cancelledAt, null);
+        } finally {
+            await db.auditLog.deleteMany({ where: { actorId: { in: userIds } } });
+            await db.reservation.deleteMany({ where: { sessionId: session.id } });
+            await db.session.delete({ where: { id: session.id } });
+            await db.layoutVersion.delete({ where: { id: layout.id } });
+            await db.venue.delete({ where: { id: venue.id } });
+            await db.user.deleteMany({ where: { id: { in: userIds } } });
+        }
+    });
+});
+
 test.after(() => db.$disconnect());
+
+test('禁止预约可独立于场次设置和解除，取消重叠预约并通知；读取记录不再触发未打卡过期', async () => {
+    const { hashToken } = await import('../src/lib/auth');
+    const { reserveSeat } = await import('../src/lib/bookings');
+    const suffix = randomUUID().replaceAll('-', '').slice(0, 16);
+    const group = await db.group.create({ data: { name: `blocks-${suffix}` } });
+    const admin = await db.user.create({ data: { name: '禁止预约管理员', studentId: `ba${suffix}`, email: `ba${suffix}@test.local`, role: 'ADMIN', groupId: group.id, passwordHash: 'unused' } });
+    const member = await db.user.create({ data: { name: '禁止预约成员', studentId: `bu${suffix}`, email: `bu${suffix}@test.local`, memberType: 'ICIL', groupId: group.id, passwordHash: 'unused' } });
+    const venue = await db.venue.create({ data: { name: suffix, location: 'test' } });
+    const layout = await db.layoutVersion.create({ data: { name: suffix, venueId: venue.id, status: 'PUBLISHED', seats: { create: { code: 'A01', x: 100, y: 100 } } }, include: { seats: true } });
+    const midnight = new Date(`${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date())}T00:00:00+08:00`);
+    const session = await db.session.create({ data: { layoutId: layout.id, startsAt: midnight, endsAt: new Date(midnight.getTime() + 2 * 86400000), icilOnly: true } });
+    const adminToken = randomUUID(), memberToken = randomUUID();
+    const headers = { cookie: `station_session=${adminToken}` }, memberHeaders = { cookie: `station_session=${memberToken}` };
+    await db.authSession.createMany({ data: [{ id: hashToken(adminToken), userId: admin.id, expiresAt: new Date(Date.now() + 3600000) }, { id: hashToken(memberToken), userId: member.id, expiresAt: new Date(Date.now() + 3600000) }] });
+    try {
+        const startsAt = new Date(Math.ceil((Date.now() + 3600000) / 1800000) * 1800000), endsAt = new Date(startsAt.getTime() + 3600000);
+        const past = await db.reservation.create({ data: { sessionId: session.id, userId: member.id, seatId: layout.seats[0].id, startsAt: new Date(Date.now() - 30 * 60000), endsAt: new Date(Date.now() + 15 * 60000) } });
+        const records = await call('reservations', 'GET', undefined, memberHeaders);
+        assert.equal(records.status, 200);
+        assert.equal((await records.json()).reservations.find((r: { id: string }) => r.id === past.id).cancelledAt, null);
+        assert.equal((await db.reservation.findUniqueOrThrow({ where: { id: past.id } })).cancelledAt, null);
+        assert.equal((await call(`reservations/${past.id}/check-in`, 'POST', '{}', headers)).status, 404);
+        const future = await reserveSeat(member.id, session.id, layout.seats[0].id, startsAt.toISOString(), endsAt.toISOString());
+        const payload = { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString(), reason: '设备维护' };
+        assert.equal((await call('admin/booking-blocks', 'POST', JSON.stringify(payload), memberHeaders)).status, 403);
+        const created = await call('admin/booking-blocks', 'POST', JSON.stringify(payload), headers);
+        assert.equal(created.status, 200, await created.clone().text());
+        const result = await created.json();
+        assert.ok(result.reservations >= 1);
+        assert.ok((await db.reservation.findUniqueOrThrow({ where: { id: future.id } })).cancelledAt);
+        assert.equal(await db.notification.count({ where: { recipientId: member.id } }), 1);
+        assert.equal((await call('admin/booking-blocks', 'GET', undefined, headers)).status, 200);
+        await assert.rejects(reserveSeat(member.id, session.id, layout.seats[0].id, startsAt.toISOString(), endsAt.toISOString()), /禁用预约/);
+        assert.equal((await call(`admin/booking-blocks/${result.block.id}`, 'DELETE', undefined, headers)).status, 200);
+        assert.ok((await db.reservation.findUniqueOrThrow({ where: { id: future.id } })).cancelledAt, '解除禁止不能自动恢复旧预约');
+        await reserveSeat(member.id, session.id, layout.seats[0].id, startsAt.toISOString(), endsAt.toISOString());
+        for (const [path, method] of [['groups', 'GET'], ['groups', 'POST'], ['groups/legacy', 'PUT'], ['sessions', 'POST'], [`sessions/${session.id}`, 'PUT'], [`admin/sessions/${session.id}/ready`, 'POST'], ['admin/sessions', 'GET']] as const) {
+            assert.equal((await call(path, method, method === 'GET' ? undefined : '{}', headers)).status, 404, path);
+        }
+        const emptyBlock = await call('admin/booking-blocks', 'POST', JSON.stringify({ startsAt: new Date(endsAt.getTime() + 86400000).toISOString(), endsAt: new Date(endsAt.getTime() + 90000000).toISOString() }), headers);
+        assert.equal(emptyBlock.status, 200, '没有场次的日期也应可以禁止预约');
+        assert.equal((await emptyBlock.json()).reservations, 0);
+        assert.equal((await call('admin/booking-blocks', 'POST', JSON.stringify({ startsAt: endsAt.toISOString(), endsAt: startsAt.toISOString() }), headers)).status, 400);
+    } finally {
+        const ids = [admin.id, member.id];
+        await db.notification.deleteMany({ where: { recipientId: { in: ids } } });
+        await db.auditLog.deleteMany({ where: { actorId: { in: ids } } });
+        await db.authSession.deleteMany({ where: { userId: { in: ids } } });
+        await db.bookingBlock.deleteMany({ where: { createdById: admin.id } });
+        await db.reservation.deleteMany({ where: { sessionId: session.id } });
+        await db.session.delete({ where: { id: session.id } });
+        await db.layoutVersion.delete({ where: { id: layout.id } });
+        await db.venue.delete({ where: { id: venue.id } });
+        await db.user.deleteMany({ where: { id: { in: ids } } });
+        await db.group.delete({ where: { id: group.id } });
+    }
+});

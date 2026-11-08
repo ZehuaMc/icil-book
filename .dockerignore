@@ -10,4 +10,5 @@ test-results
 playwright-report
 reports
 backups
+data
 *.tsbuildinfo

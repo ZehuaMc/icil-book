@@ -1,0 +1,50 @@
+name: icil-book-preview
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: station
+      POSTGRES_PASSWORD: preview-db
+      POSTGRES_DB: station
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U station -d station"]
+      interval: 2s
+      timeout: 5s
+      retries: 20
+
+  db-init:
+    image: icil-book:preview
+    build: .
+    pull_policy: build
+    command: ["sh", "-c", "npm run db:init && npm run db:seed"]
+    environment:
+      DATABASE_URL: postgresql://station:preview-db@postgres:5432/station?schema=public
+      ADMIN_STUDENT_ID: admin001
+      ADMIN_PASSWORD: Preview-Admin-2026!
+      ADMIN_NAME: 预览管理员
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    image: icil-book:preview
+    pull_policy: never
+    init: true
+    environment:
+      DATABASE_URL: postgresql://station:preview-db@postgres:5432/station?schema=public
+      APP_ORIGIN: http://localhost:3100
+      COOKIE_SECURE: 'false'
+    ports:
+      - "127.0.0.1:3100:3000"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s

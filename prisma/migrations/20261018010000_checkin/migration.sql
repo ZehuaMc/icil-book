@@ -1,1 +1,0 @@
-ALTER TABLE "Reservation" ADD COLUMN "checkedInAt" TIMESTAMPTZ(3);

@@ -1,4 +1,30 @@
-# 2026-10-16 本机验收记录
+# 2026-11-08 当前代码测试验收
+
+在全新临时 PostgreSQL 17 数据库上运行 `npm run verify`：**PASS**，全部测试零失败、零跳过。使用本机 Node.js 24.20.0、Next.js 15.5.28 生产构建和 Chromium；浏览器连接由验证程序启动的 `npm start` 服务。
+
+| 项目 | 结果 |
+| --- | --- |
+| Prisma 生成、模型检查、TypeScript、生产构建 | 通过 |
+| 时间、请求与几何单元测试 | 17 通过 |
+| 接口处理器测试 | 20 通过（17 个主测试，其中包含 3 个子测试） |
+| 空 schema 建库、重复初始化、seed 与数据库约束 | 1 通过 |
+| PostgreSQL 集成 | 15 个子场景通过，含父测试统计为 16 |
+| 独立取消通知测试 | 1 通过，已纳入 verify |
+| Playwright | 17 通过；7 个页面交互、10 个真实 HTTP 场景 |
+| TypeScript/TSX 语法检查 | 30 个文件，0 个语法错误 |
+| 生产服务 HTTP 冒烟 | 通过；登录、后台、健康检查、来源拒绝、Cookie 与注销 |
+
+本次检查覆盖全部 7 个 Node 测试文件、2 个 Playwright 文件及部署冒烟脚本。适配统一登录、助教实际工位预约覆盖、ICIL 直接预约、半小时多段预约、禁止预约时间，以及已移除的预约规则、时段管理和打卡入口。补充了预约截止时间、批量失败日志回滚、跨容器并发、通知访问隔离、助教降级/停用/注销联动和数据库时间约束检查。浏览器测试使用明确的上海日期和独立场地，避免跨日与共享布局导致偶发失败。
+
+完整验证结束后，测试数据库仅保留种子管理员、场地与布局，以及公开接口自动创建的日期容器；测试分组、预约、禁止时间、通知、审计日志、登录会话和限流记录均为 0。临时数据库和冒烟用生产服务随后清理。
+
+复现：按 README 配置 `.env.test`，启动 `docker compose -f docker-compose.test.yml up -d --wait`，执行 `npm run verify`。本机 Chromium 另通过未跟踪的 `.env.test` 中 `LD_LIBRARY_PATH` 使用已安装的动态库；CI 通过 Playwright 标准依赖安装命令准备环境。
+
+最新证据：[完整日志](verify.log)、[Playwright JSON](playwright.json)、[HTTP 冒烟](http-smoke.log)、[源文件校验值](source-sha256.json)、[平板截图](screenshots/tablet-booking.png)、[窄屏截图](screenshots/mobile-booking.png)、[布局截图](screenshots/published-layout.png)。Playwright 从 2026-11-08 06:29:54 UTC 开始，约 20.1 秒，expected=17、unexpected=0、skipped=0、flaky=0。HTML 报告保存在本机 `playwright-report/`。
+
+本次没有重新执行 Docker 应用镜像构建、备份恢复或 HTTPS 验收，也没有推送或触发远端 CI。下面保留旧版本的部署记录；其中上述日志、JSON、HTTP 冒烟、三张页面截图和源文件校验值链接已更新为本次结果，其他历史证据保留原内容。
+
+## 2026-10-16 历史验收记录
 
 最终完整验证：**PASS**。真实 PostgreSQL 17、Next.js 15.5.28 生产构建/服务与 Chromium 156 参与，无失败、无跳过。
 

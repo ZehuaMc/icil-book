@@ -35,13 +35,15 @@ enum ElementKind {
   LABEL
 }
 
+// Legacy grouping and rule tables are retained for existing database compatibility.
+// The application no longer reads or creates booking rules.
 model Group {
   id          String              @id @default(cuid())
   name        String              @unique
-  canReserve  Boolean             @default(false)
+  canReserve  Boolean             @default(false) @ignore
   users       User[]
-  weeklyRules GroupScheduleRule[]
-  dateRules   GroupDateRule[]
+  weeklyRules GroupScheduleRule[] @ignore
+  dateRules   GroupDateRule[] @ignore
   settings    AppSetting[]
 }
 
@@ -58,6 +60,8 @@ model GroupScheduleRule {
   weekday     Int
   startMinute Int
   endMinute   Int
+
+  @@ignore
 }
 
 model GroupDateRule {
@@ -70,6 +74,7 @@ model GroupDateRule {
   endMinute   Int     @default(1440)
 
   @@index([groupId, date])
+  @@ignore
 }
 
 model User {
@@ -82,8 +87,9 @@ model User {
   memberType    MemberType            @default(YSYX)
   enabled       Boolean               @default(true)
   deletedAt     DateTime?             @db.Timestamptz(3)
-  groupId       String
-  group         Group                 @relation(fields: [groupId], references: [id])
+  // Optional legacy association; never used for booking eligibility.
+  groupId       String?
+  group         Group?                @relation(fields: [groupId], references: [id])
   createdAt     DateTime              @default(now()) @db.Timestamptz(3)
   authSessions  AuthSession[]
   coverage      AssistantCoverage[]
@@ -167,9 +173,8 @@ model Session {
   createdAt          DateTime              @default(now()) @db.Timestamptz(3)
   requiredAssistants Int                   @default(1)
   open               Boolean               @default(true)
-  // Internal all-day availability container for ICIL members. It is hidden
-  // from the administrator's session list and is controlled only by booking
-  // blocks, not by administrator coverage/opening.
+  // Internal daily container shared by members and assistants.
+  // Member eligibility is checked against assistant seat reservations and blocks.
   icilOnly           Boolean               @default(false)
   cancelledAt        DateTime?             @db.Timestamptz(3)
   coverage           AssistantCoverage[]
@@ -232,10 +237,11 @@ model Reservation {
   startsAt    DateTime  @db.Timestamptz(3)
   endsAt      DateTime  @db.Timestamptz(3)
   createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-  checkedInAt DateTime? @db.Timestamptz(3)
+  // Historical column retained for existing databases; check-in is no longer used.
+  checkedInAt DateTime? @db.Timestamptz(3) @ignore
   cancelledAt DateTime? @db.Timestamptz(3)
 
-  // Partial unique indexes in the migration enforce uniqueness for active bookings.
+  // prisma/constraints.sql prevents overlapping active bookings per seat or user.
   @@index([sessionId, seatId])
   @@index([sessionId, userId])
   @@index([startsAt])

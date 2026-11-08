@@ -1,1 +1,1 @@
-PASS http://localhost:3100: Chromium 登录、管理员页面、健康检查、跨站拒绝、Cookie Secure=false、注销
+PASS http://127.0.0.1:3002: Chromium 登录、管理员页面、健康检查、跨站拒绝、Cookie Secure=false、注销

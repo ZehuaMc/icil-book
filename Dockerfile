@@ -16,6 +16,7 @@ COPY --from=build --chown=node:node /app/.next ./.next
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/package.json /app/next.config.ts ./
 COPY --from=build --chown=node:node /app/prisma ./prisma
+COPY --from=build --chown=node:node /app/scripts/init-db.mjs ./scripts/init-db.mjs
 COPY --from=build --chown=node:node /app/src/lib ./src/lib
 USER node
 EXPOSE 3000

@@ -1,8 +1,26 @@
 # 运行与部署
 
+## 临时本地预览
+
+无需配置环境变量，运行：
+
+```bash
+docker compose -f docker-compose.preview.yml up -d --build --wait
+```
+
+打开 http://localhost:3100。管理员学号 `admin001`，密码 `Preview-Admin-2026!`；成员可自行注册。仅监听本机，数据库使用内存临时存储，停止数据库容器后数据即丢失。
+
+查看完成后删除预览容器和网络：
+
+```bash
+docker compose -f docker-compose.preview.yml down --volumes --remove-orphans
+# 如不再需要预览镜像，也可删除
+docker image rm icil-book:preview
+```
+
 ## 本机 Docker 运行
 
-应用、迁移与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目；PostgreSQL 数据保存到 `.env.deploy` 中 `DB_DATA_DIR` 指定的宿主机目录（默认 `./data/postgres`），不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`，可由宿主机 Nginx、Caddy 等反向代理转发。
+应用、建库任务与 PostgreSQL 使用独立的 `teaching-station-deploy` 项目；PostgreSQL 数据保存到 `.env.deploy` 中 `DB_DATA_DIR` 指定的宿主机目录（默认 `./data/postgres`），不会复用 `teaching-station-test` 临时测试库。数据库不映射宿主机端口，应用默认只监听本机 `127.0.0.1:3100`，可由宿主机 Nginx、Caddy 等反向代理转发。
 
 ```bash
 cp .env.deploy.example .env.deploy
@@ -12,7 +30,7 @@ chmod 600 .env.deploy
 # 本机 HTTP：APP_ORIGIN=http://localhost:3100，COOKIE_SECURE=false
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml up -d --build --wait
 # 首次体验时手动初始化示例账号，正常重启不会自动 seed
-docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm migrate npm run db:seed
+docker compose --env-file .env.deploy -f docker-compose.deploy.yml run --rm db-init npm run db:seed
 ```
 
 打开 `APP_ORIGIN` 对应的地址。管理员使用 `.env.deploy` 中的 `ADMIN_STUDENT_ID` 和 `ADMIN_PASSWORD` 登录；`db:seed` 不会创建示例学员。学员可自行注册，默认是一生一芯成员。管理员可在用户管理中把成员调整为 ICIL 成员或助教。
@@ -38,7 +56,7 @@ location / {
 }
 ```
 
-镜像以非 root 用户运行，并包含 `public/` 静态资源。迁移任务成功后才启动应用；`/api/health` 同时检查 Web 服务和数据库连接。管理员初始化是独立命令，重复运行会更新 `.env.deploy` 中管理员的密码和资料，不创建学员。
+镜像以非 root 用户运行，并包含 `public/` 静态资源。建库任务成功后才启动应用；`/api/health` 同时检查 Web 服务和数据库连接。管理员初始化是独立命令，重复运行会更新 `.env.deploy` 中管理员的密码和资料，不创建学员。
 
 ```bash
 docker compose --env-file .env.deploy -f docker-compose.deploy.yml ps

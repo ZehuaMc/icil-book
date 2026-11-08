@@ -1,12 +1,38 @@
 # 教学工位预约系统交接文档
 
-更新日期：2026-10-16。本文件已根据本次真实 Docker/PostgreSQL/Chromium 执行结果更新。
+最新验证日期：2026-11-08。数据库使用 `npm run db:init` 直接建库；最新记录见 [验收记录](reports/ACCEPTANCE.md)，完整日志和 Playwright JSON 已更新。下方 2026-10-16 的部署、备份与 HTTPS 说明保留为历史记录。
+
+## 2026-11-08 全部测试适配
+
+- 全部 7 个 Node 测试文件、2 个 Playwright 文件按当前统一登录、半小时多段选座、禁止预约和无预约规则/打卡流程检查更新。
+- `verify` 纳入原先遗漏的取消通知测试；新增 `test:notifications` 命令；接口测试与其他数据库测试统一读取环境配置。CI 使用当前的管理员学号和密码变量。
+- 预约测试使用明确的上海日期，浏览器布局测试使用独立场地，并清理注册限流、会话与审计数据。
+- 补充批量失败日志回滚、跨容器并发、成员截止时间、通知访问隔离、助教降级/停用/注销联动，以及数据库重叠与非法区间约束检查。
+- 完整验证结果：17 项单元、20 项接口（含 3 个子测试）、1 项空库/重复初始化、16 项集成（含 15 个子场景）、1 项取消通知及 17 项 Playwright 验收。Prisma、类型与生产构建一并验证；最新执行结果以验收记录及日志为准。
+
+## 2026-11-08 移除预约规则
+
+移除预约规则菜单、概览入口、页面、接口、每周及日期校验、规则类型和初始化数据。新账号无需默认分组即可注册；登录和预约也不读取分组规则。历史规则表及关联保留以兼容现有数据库，Prisma 忽略规则模型。继续执行一生一芯的助教预约完整覆盖检查、所有身份的禁止预约时间及现有预约范围限制。
+
+本次完整验证通过：13 项单元、15 项接口、1 项数据库初始化、12 个集成子场景、17 项 Chromium 验收；另行通过取消通知测试。类型检查、Prisma 模型及生产构建通过。
+
+下方“预约流程调整”记录是本次移除规则之前的历史说明。
+
+## 2026-11-08 预约流程调整
+
+- 移除后台“预约时段”页面及创建、开放、换管理员工位接口，助教和成员直接选日期、半小时时间和工位。
+- 新增 `/admin/booking-blocks`，支持任意范围及整天禁止预约、解除禁止；禁止对所有身份生效，取消范围内预约并通知。
+- 一生一芯必须有同场地助教工位预约完整覆盖所选时间；管理员预约与旧保障登记不算覆盖。ICIL 无需助教预约。助教取消或账号变更会清理失去覆盖的一生一芯预约，保留 ICIL。
+- 统一登录界面与服务端身份识别；兼容历史同学号多角色账号，按密码识别。
+- 移除打卡接口、界面及未打卡过期释放逻辑；历史列使用 Prisma `@ignore` 保留数据库兼容。
+- 测试已按新规则更新；下方历史验收中的场次发布、独立保障与旧登录入口说明仅供历史参考。
+- 本次完整验证通过：23 项单元测试、15 项接口测试、1 项空库与重复初始化测试、12 个数据库集成子场景及 17 项 Chromium 验收；Prisma 模型、TypeScript 与生产构建通过。
 
 ## 当前结论
 
 **已跑通真实 PostgreSQL、Next.js 生产服务与 Chromium 同时参与的完整验证。** 原交接中的 Docker、监听端口和浏览器下载阻塞已解除。核心 MVP 可以在本机运行，关键并发、权限、布局和后台交互已有实际通过记录。
 
-应用 Docker 镜像、独立持久数据库、迁移任务、健康检查、Caddy HTTPS 配置、备份与安全恢复脚本均已补齐。公网部署尚需实际域名与服务器；Git 远端已配置为 `git@github.com:ZehuaMc/icil-book.git`，GitHub Actions 结果待推送后确认。没有将本机成功描述为公网或 CI 成功。
+应用 Docker 镜像、独立持久数据库、建库任务、健康检查、Caddy HTTPS 配置、备份与安全恢复脚本均已补齐。公网部署尚需实际域名与服务器；Git 远端已配置为 `git@github.com:ZehuaMc/icil-book.git`，GitHub Actions 结果待推送后确认。没有将本机成功描述为公网或 CI 成功。
 
 ## 已完成与证据
 
@@ -16,11 +42,11 @@
 | Prisma 生成、模型校验、类型检查、生产构建 | 全部通过 | reports/verify.log |
 | 规则/请求/几何单元 | 21 通过，无跳过 | reports/verify.log |
 | 接口处理器 | 5 通过，无跳过 | reports/verify.log |
-| 空数据库初始化 | 独立随机 schema 执行迁移/seed，再执行迁移/seed；保留人工修改、密码、默认组、布局、场次和取消的保障 | tests/database.test.ts，日志中 1 个主测试 |
-| 迁移结构 | Prisma migrate diff 无差异；实际存在两个有效预约部分唯一索引 | reports/reservation-indexes.txt |
+| 空数据库初始化 | 独立随机 schema 执行建库/seed，再执行建库/seed；保留人工修改、密码、默认组、布局、场次和取消的保障 | tests/database.test.ts，日志中 1 个主测试 |
+| 数据库结构 | 当前使用 `db:init` 按模型建表并创建预约时间冲突约束 | prisma/schema.prisma、prisma/constraints.sql |
 | PostgreSQL 集成 | 原有 13 个顺序子场景通过；Node 统计包括父测试为 14 | tests/integration.test.ts |
 | 真实 HTTP 与 Chromium | 16 场景通过，无跳过；6 个页面交互、10 个 HTTP 场景 | reports/playwright.json，playwright-report/index.html |
-| 容器部署 | Node 22 多阶段构建，非 root 运行，数据库不暴露宿主端口，迁移成功后启动应用 | Dockerfile、docker-compose.deploy.yml |
+| 容器部署 | Node 22 多阶段构建，非 root 运行，数据库不暴露宿主端口，建库成功后启动应用 | Dockerfile、docker-compose.deploy.yml |
 | 运行健康 | /api/health 检查真实数据库连接 | 本机 HTTP/HTTPS 冒烟检查 |
 | 重启与恢复 | app/postgres 重启后保留 3 用户、24 座位、21 场次；备份恢复到独立库并保留两个有效唯一索引 | reports/ACCEPTANCE.md |
 | HTTPS | Caddy 配置与本机 TLS 冒烟检查见验收记录 | docker-compose.https.yml、scripts/deployment-smoke.mjs |
@@ -65,7 +91,7 @@ docker compose -f docker-compose.test.yml up -d --wait
 npm run verify
 ```
 
-verify 依次执行生成、模型校验、迁移、seed、类型、21 单元、5 接口、空库/幂等检查、13 数据库子场景、生产构建及 16 Playwright 场景。配置缺失会失败，不会静默跳过。不要对运营库执行。
+verify 依次执行生成、模型校验、建库、seed、类型、21 单元、5 接口、空库/幂等检查、13 数据库子场景、生产构建及 16 Playwright 场景。配置缺失会失败，不会静默跳过。不要对运营库执行。
 
 本机 Ubuntu 26.04 缺少 libnspr4/libnss3，本次已下载 Ubuntu 软件包并解压至用户目录，LD_LIBRARY_PATH 仅写入未跟踪的 .env.test；中文字体安装在用户字体目录。其他机器推荐运行 Playwright 的标准依赖安装命令。Docker 权限此前因当前会话未继承 docker 组而拒绝，用户已通过 socket ACL 修复；socket 重建后应重新登录使组权限生效。
 

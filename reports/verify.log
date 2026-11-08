@@ -10,7 +10,7 @@
 
 Prisma schema loaded from prisma/schema.prisma
 
-✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 170ms
+✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 126ms
 
 Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
 
@@ -25,18 +25,18 @@ Tip: Need your database queries to be 1000x faster? Accelerate offers you that a
 Prisma schema loaded from prisma/schema.prisma
 The schema at prisma/schema.prisma is valid 🚀
 
->>> db:migrate
+>>> db:init
 
-> teaching-station-reservations@1.0.0 db:migrate
-> prisma migrate deploy
+> teaching-station-reservations@1.0.0 db:init
+> node --env-file-if-exists=.env scripts/init-db.mjs
 
+.env not found. Continuing without it.
 Prisma schema loaded from prisma/schema.prisma
 Datasource "db": PostgreSQL database "station_test", schema "public" at "127.0.0.1:5433"
 
-1 migration found in prisma/migrations
+🚀  Your database is now in sync with your Prisma schema. Done in 186ms
 
-
-No pending migrations to apply.
+Script executed successfully.
 
 >>> db:seed
 
@@ -44,7 +44,7 @@ No pending migrations to apply.
 > node --env-file-if-exists=.env --import tsx prisma/seed.ts
 
 .env not found. Continuing without it.
-初始化完成：3 个角色账号、23 个可预约工位、未来 7 天课程。账号密码来自 SEED_PASSWORD。
+初始化完成：管理员 testadmin、23 个可预约工位。一生一芯成员必须已有助教预约完整时间才能预约。
 
 >>> typecheck
 
@@ -57,54 +57,67 @@ No pending migrations to apply.
 > teaching-station-reservations@1.0.0 test
 > node --experimental-strip-types --test --experimental-test-isolation=none tests/rules.test.ts tests/request.test.ts tests/geometry.test.ts
 
-✔ 家具与座位完整尺寸必须留在画布内，允许边缘重合 (1.252372ms)
-✔ 旋转后的外接范围越界也拒绝，直角浮点误差不误拒边界 (0.250827ms)
-✔ 桌面连同座位拖动时整体限位，保留桌椅相对位置 (0.691587ms)
-✔ JSON 请求支持分块输入与中文多字节内容 (28.230984ms)
-✔ 缺少 Content-Length 时也拒绝超过 1 MB 的请求 (3.054657ms)
-✔ 伪造较小 Content-Length 无法绕过大小限制 (1.585471ms)
-✔ Content-Length 过大时在读取前拒绝 (0.698961ms)
-✔ 非 JSON、空请求与非法 UTF-8 返回 400 (1.485755ms)
-✔ 同源写请求和无 Origin 的客户端请求可通过，跨站写请求被拒绝 (1.595801ms)
-✔ 生产服务使用浏览器 Host 校验来源，兼容 Next 内部地址并拒绝跨站和不同端口 (0.873035ms)
-✔ 上海日期、分钟与星期，不依赖服务器时区 (12.36028ms)
-✔ 每周规则必须覆盖课程完整时段，边界可重合 (0.534926ms)
-✔ 无规则、规则不匹配或分组关闭时禁止预约 (0.377292ms)
-✔ 日期关闭规则覆盖每周允许规则 (0.212135ms)
-✔ 日期开放规则覆盖每周禁止，并严格限制窗口 (0.344642ms)
-✔ 存在日期规则时，不回退到每周规则 (0.18776ms)
-✔ 日期禁止窗口与课程相交时优先拒绝 (0.259142ms)
-✔ 允许课程在次日零点结束，跨日课程不误用单日规则 (0.280341ms)
-✔ 秒与毫秒不能越过权限窗口边界 (0.322641ms)
-✔ 跨日课程必须分别满足两天规则，日期覆盖规则不能被绕过 (0.524005ms)
-✔ 非法、反向、零长度及超过 24 小时的时段拒绝预约 (0.082894ms)
-ℹ tests 21
+✔ 家具与座位完整尺寸必须留在画布内，允许边缘重合 (0.902287ms)
+✔ 旋转后的外接范围越界也拒绝，直角浮点误差不误拒边界 (0.12916ms)
+✔ 桌面连同座位拖动时整体限位，保留桌椅相对位置 (0.765663ms)
+✔ 长桌旋转后的外接范围决定拖动边界 (0.289037ms)
+✔ 拖动吸附最近桌椅边缘，超过阈值或没有目标时不吸附 (0.488518ms)
+✔ JSON 请求支持分块输入与中文多字节内容 (23.960537ms)
+✔ 缺少 Content-Length 时也拒绝超过 1 MB 的请求 (2.523751ms)
+✔ 伪造较小 Content-Length 无法绕过大小限制 (1.485782ms)
+✔ Content-Length 过大时在读取前拒绝 (0.611707ms)
+✔ 请求大小按字节限制，恰好 1 MB 允许，超限时取消剩余流 (10.606016ms)
+✔ 非 JSON、空请求与非法 UTF-8 返回 400 (1.21624ms)
+✔ 同源写请求和无 Origin 的客户端请求可通过，跨站写请求被拒绝 (1.41492ms)
+✔ 生产服务使用浏览器 Host 校验来源，兼容 Next 内部地址并拒绝跨站和不同端口 (0.88777ms)
+✔ 上海日期、分钟与星期，不依赖服务器时区 (11.144274ms)
+✔ 成员预约范围按北京时间跨日，包含今天与明天 (0.658644ms)
+✔ 助教预约须覆盖完整时间，允许相邻接续而拒绝部分相交或空隙 (0.255515ms)
+✔ 助教覆盖忽略过期、无效和嵌套区间，不能跳过一分钟空隙 (0.106027ms)
+ℹ tests 17
 ℹ suites 0
-ℹ pass 21
+ℹ pass 17
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 115.593369
+ℹ duration_ms 119.834293
 
 >>> test:api
 
 > teaching-station-reservations@1.0.0 test:api
-> node --import tsx --test --experimental-test-isolation=none tests/api.test.ts
+> node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/api.test.ts
 
-✔ 当前用户接口在没有登录 Cookie 时返回 null (8.45437ms)
-✔ 后台、个人记录和写接口拒绝未登录请求 (4.332534ms)
-✔ 登录注册输入错误返回 400，不触及数据库 (7.871305ms)
-✔ 路由层对非法 JSON、跨站写入与过大流式请求返回对应错误 (3.439622ms)
-✔ 没有会话的退出请求可安全重复执行 (1.522385ms)
-ℹ tests 5
+.env not found. Continuing without it.
+✔ 当前用户接口在没有登录 Cookie 时返回 null (8.733965ms)
+✔ 后台、个人记录和写接口拒绝未登录请求 (6.043893ms)
+✔ 登录注册拒绝非法学号、短密码和管理员注册 (62.074063ms)
+✔ 路由层对非法 JSON、跨站写入与过大流式请求返回对应错误 (3.757794ms)
+✔ 没有会话的退出请求可安全重复执行 (1.000359ms)
+✔ 覆盖布局时只改座位权限不会删除原有家具 (69.589511ms)
+✔ 自动日期入口执行助教完整覆盖检查，ICIL可直接预约并受禁止时间限制 (265.829361ms)
+✔ 发布布局同步最近的未来空时段，已有预约的时段保留原布局 (47.070022ms)
+✔ 暂停时段且没有有效预约后可以删除关联布局 (59.575609ms)
+✔ ICIL改回YSYX后，仅保留有助教完整预约覆盖的记录 (70.391681ms)
+✔ 管理员只能重置学员密码，学员可改密且只保留当前会话 (1735.118069ms)
+✔ 已注销的学员可用相同学号重新注册并登录，管理员不可注册 (861.944189ms)
+✔ 管理员注册入口始终关闭 (5.315921ms)
+✔ 所有角色统一登录且不依赖客户端身份，旧同学号账号按密码识别 (51.283093ms)
+✔ 通知仅对接收者可见，单条和全部已读不能修改其他用户的通知 (49.208547ms)
+▶ 助教降级、停用或注销后取消失去覆盖的一生一芯预约，保留ICIL
+  ✔ 降级 (143.308737ms)
+  ✔ 停用 (129.503016ms)
+  ✔ 注销 (110.816502ms)
+✔ 助教降级、停用或注销后取消失去覆盖的一生一芯预约，保留ICIL (385.431145ms)
+✔ 禁止预约可独立于场次设置和解除，取消重叠预约并通知；读取记录不再触发未打卡过期 (152.147435ms)
+ℹ tests 20
 ℹ suites 0
-ℹ pass 5
+ℹ pass 20
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 248.256886
+ℹ duration_ms 4028.801039
 
 >>> test:database
 
@@ -112,7 +125,7 @@ No pending migrations to apply.
 > node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/database.test.ts
 
 .env not found. Continuing without it.
-✔ 空 schema 迁移、实际索引、模型一致性与重复初始化保留人工修改 (4362.383236ms)
+✔ 空 schema 建库、预约冲突约束与重复初始化保留人工修改 (5317.053514ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 1
@@ -120,7 +133,7 @@ No pending migrations to apply.
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 4455.455619
+ℹ duration_ms 5423.691168
 
 >>> test:integration
 
@@ -128,29 +141,47 @@ No pending migrations to apply.
 > node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/integration.test.ts
 
 .env not found. Continuing without it.
-▶ PostgreSQL: coverage gates, authorization, cancellation, and concurrent uniqueness
-  ✔ no assistant means no booking; learner cannot register coverage (21.907684ms)
-  ✔ coverage does not consume seats and cannot be duplicated (20.300252ms)
-  ✔ a two-assistant threshold opens seats only after both register (67.677768ms)
-  ✔ a seat from a different published layout cannot be booked (13.893744ms)
-  ✔ same seat, different users: exactly one concurrent booking succeeds (65.646337ms)
-  ✔ one user cannot reserve a second seat; someone else cannot cancel (19.683614ms)
-  ✔ coverage cannot be removed once learners have booked (11.664935ms)
-  ✔ cancellation retains history and releases seat (53.160694ms)
-  ✔ same user, different seats: exactly one concurrent booking succeeds (41.209467ms)
-  ✔ racing coverage removal and booking never leaves an unstaffed reservation (44.651073ms)
-  ✔ disabled users and forbidden groups are rejected by service (19.397821ms)
-  ✔ database itself rejects duplicate active seat and user keys (25.559401ms)
-  ✔ ended sessions reject booking and cancellation (32.849333ms)
-✔ PostgreSQL: coverage gates, authorization, cancellation, and concurrent uniqueness (567.418098ms)
-ℹ tests 14
+▶ PostgreSQL: 助教实际预约覆盖、成员权限、禁止时间与并发
+  ✔ 自动日期容器不能绕过助教要求；管理员预约和旧保障登记不能充当助教预约 (86.101945ms)
+  ✔ 旧预约规则已停用；一生一芯仅需助教预约覆盖，ICIL可直接预约 (107.292119ms)
+  ✔ 多个助教相邻预约可覆盖完整时间，存在空隙则拒绝 (144.093174ms)
+  ✔ 不同日期容器内的助教预约按同一场地完整时间检查 (60.211578ms)
+  ✔ 停用或注销的助教不提供预约资格 (52.829054ms)
+  ✔ 批量预约全有或全无；缺少一个时间的助教预约不会部分成功 (52.225485ms)
+  ✔ 批量预约支持乱序不连续时间，冲突时连同成功日志一起回滚 (64.132765ms)
+  ✔ 成员可预约到明天午夜，后天仅助教和管理员可约 (83.019997ms)
+  ✔ 不同日期容器并发仍限制同人和同场地同编号工位的重叠预约 (154.900451ms)
+  ✔ 禁止时间对一生一芯、ICIL、助教和管理员均生效，边界相邻可约 (124.216215ms)
+  ✔ 同座并发只允许一个成功；取消释放且保留历史 (109.952452ms)
+  ✔ 同人并发只能预约一个座位；半小时不对齐、停用及固定座位拒绝成员 (106.833586ms)
+  ✔ 助教取消只取消失去覆盖的一生一芯预约，保留ICIL及其他完整覆盖的预约 (138.297123ms)
+  ✔ 助教取消和成员提交竞争，最终不会留下无助教覆盖的有效预约 (72.278976ms)
+  ✔ 数据库约束拒绝重叠活动预约，已开始预约不能取消 (35.258851ms)
+✔ PostgreSQL: 助教实际预约覆盖、成员权限、禁止时间与并发 (1511.020179ms)
+ℹ tests 16
 ℹ suites 0
-ℹ pass 14
+ℹ pass 16
 ℹ fail 0
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 674.327311
+ℹ duration_ms 1667.951394
+
+>>> test:notifications
+
+> teaching-station-reservations@1.0.0 test:notifications
+> node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/cancellation-notification.test.ts
+
+.env not found. Continuing without it.
+✔ 最后一名助教取消工位时只释放失去覆盖的学员预约并通知 (312.254504ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 463.676709
 
 >>> build
 
@@ -159,18 +190,18 @@ No pending migrations to apply.
 
 Prisma schema loaded from prisma/schema.prisma
 
-✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 118ms
+✔ Generated Prisma Client (v6.19.0) to ./node_modules/@prisma/client in 121ms
 
 Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
 
-Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+Tip: Interested in query caching in just a few lines of code? Try Accelerate today! https://pris.ly/tip-3-accelerate
 
    ▲ Next.js 15.5.28
    - Experiments (use with caution):
      · cpus: 2
 
    Creating an optimized production build ...
- ✓ Compiled successfully in 2.3s
+ ✓ Compiled successfully in 1694ms
    Linting and checking validity of types ...
    Collecting page data ...
    Generating static pages (0/3) ...
@@ -179,9 +210,9 @@ Tip: Need your database queries to be 1000x faster? Accelerate offers you that a
    Collecting build traces ...
 
 Route (app)                                 Size  First Load JS
-┌ ○ /_not-found                            993 B         104 kB
-├ ƒ /[[...page]]                           24 kB         127 kB
-└ ƒ /api/[...path]                         122 B         103 kB
+┌ ○ /_not-found                            130 B         103 kB
+├ ƒ /[[...page]]                         26.7 kB         129 kB
+└ ƒ /api/[...path]                         130 B         103 kB
 + First Load JS shared by all             103 kB
   ├ chunks/255-b1e2483a7e02feee.js       46.6 kB
   ├ chunks/4bd1b696-c023c6e3521b1417.js  54.2 kB
@@ -198,31 +229,32 @@ Route (app)                                 Size  First Load JS
 > node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test
 
 .env not found. Continuing without it.
-[WebServer] (node:39000) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (node:56301) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 [WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
 
-Running 16 tests using 1 worker
+Running 17 tests using 1 worker
 
 .env not found. Continuing without it.
-(node:39061) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(node:56380) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
 (Use `node --trace-warnings ...` to show where the warning was created)
-  ✓   1 [chromium] › e2e/acceptance.spec.ts:64:1 › 并发创建重叠场次只成功一个，相邻时段允许 (232ms)
-  ✓   2 [chromium] › e2e/acceptance.spec.ts:71:1 › 最后管理员保护：两名管理员同时降级或禁用仍保留一名 (149ms)
-  ✓   3 [chromium] › e2e/acceptance.spec.ts:95:1 › 助教登记与降级/停用竞争不产生无效保障 (166ms)
-  ✓   4 [chromium] › e2e/acceptance.spec.ts:115:1 › 保存与发布竞争、复制版本后编辑保持旧场次布局稳定 (159ms)
-  ✓   5 [chromium] › e2e/acceptance.spec.ts:137:1 › 有预约场次锁定、关闭重开、管理员取消与失败事务日志 (343ms)
-  ✓   6 [chromium] › e2e/acceptance.spec.ts:162:1 › 已登录分组/角色立即生效，禁止分组仍可取消自己的旧预约 (189ms)
-  ✓   7 [chromium] › e2e/acceptance.spec.ts:174:1 › CSV 筛选、BOM、中文、引号换行及公式前缀转义 (179ms)
-  ✓   8 [chromium] › e2e/acceptance.spec.ts:191:1 › 真实 Cookie、会话过期/撤销、15 次限流与窗口重置 (342ms)
-  ✓   9 [chromium] › e2e/acceptance.spec.ts:228:1 › 布局输入拒绝重复编号、非法关联、尺寸和旋转越界 (132ms)
-  ✓  10 [chromium] › e2e/acceptance.spec.ts:246:1 › 后台表单：用户、分组规则、课程、场次、预约取消和日志 (2.7s)
-  ✓  11 [chromium] › e2e/acceptance.spec.ts:295:1 › 平板触屏和窄屏登录退出、座位键盘操作与确认框焦点 (1.2s)
-  ✓  12 [chromium] › e2e/acceptance.spec.ts:330:1 › 两个浏览器抢座刷新，失败可重试，取消后座位释放 (2.3s)
-  ✓  13 [chromium] › e2e/acceptance.spec.ts:368:1 › 布局画布拖动、缩放、尺寸旋转、多选编号与发布只读 (1.5s)
-  ✓  14 [chromium] › e2e/booking.spec.ts:17:1 › 注册 → 登录 → 助教保障 → 学员选座 → 管理员查看与导出 (6.0s)
-  ✓  15 [chromium] › e2e/booking.spec.ts:75:1 › 管理员编辑布局、发布与场次绑定，已发布版本不可修改 (1.9s)
-  ✓  16 [chromium] › e2e/booking.spec.ts:116:1 › 接口权限、默认分组、日期覆盖、账号停用及退出会话 (2.2s)
+  ✓   1 [chromium] › e2e/acceptance.spec.ts:65:1 › 后台创建和开放时段接口已移除，助教直接预约工位 (371ms)
+  ✓   2 [chromium] › e2e/acceptance.spec.ts:72:1 › 最后管理员保护：两名管理员同时降级或禁用仍保留一名 (156ms)
+  ✓   3 [chromium] › e2e/acceptance.spec.ts:97:1 › 助教预约与停用竞争后，成员不能用停用助教的预约取得资格 (133ms)
+  ✓   4 [chromium] › e2e/acceptance.spec.ts:106:1 › 保存与发布竞争、复制版本后编辑保持旧场次布局稳定 (168ms)
+  ✓   5 [chromium] › e2e/acceptance.spec.ts:128:1 › 禁止预约时间取消范围内预约，解除后可以重新预约并保留取消历史 (255ms)
+  ✓   6 [chromium] › e2e/acceptance.spec.ts:141:1 › 预约规则接口已移除，已有助教预约即可选座；角色变更立即生效 (231ms)
+  ✓   7 [chromium] › e2e/acceptance.spec.ts:154:1 › CSV 筛选、BOM、中文、引号换行及公式前缀转义 (158ms)
+  ✓   8 [chromium] › e2e/acceptance.spec.ts:171:1 › 真实 Cookie、会话过期/撤销、15 次限流与窗口重置 (378ms)
+  ✓   9 [chromium] › e2e/acceptance.spec.ts:208:1 › 布局输入拒绝重复编号、非法关联、尺寸和旋转越界 (110ms)
+  ✓  10 [chromium] › e2e/acceptance.spec.ts:224:1 › 后台禁止预约表单支持整天禁止和解除，导航中没有预约时段 (1.2s)
+  ✓  11 [chromium] › e2e/acceptance.spec.ts:251:1 › 平板触屏和窄屏登录退出、座位键盘操作与确认框焦点 (1.4s)
+  ✓  12 [chromium] › e2e/acceptance.spec.ts:291:1 › 两个浏览器抢座刷新，失败可重试，取消后座位释放 (2.9s)
+  ✓  13 [chromium] › e2e/acceptance.spec.ts:337:1 › 布局画布拖动、缩放、尺寸旋转、多选编号与发布只读 (1.5s)
+  ✓  14 [chromium] › e2e/acceptance.spec.ts:381:1 › 助教通过相同选座界面预约后，一生一芯对应时间才可预约 (2.2s)
+  ✓  15 [chromium] › e2e/booking.spec.ts:29:1 › ICIL无需预建时段即可预约；所有角色共用登录页且没有打卡 (4.6s)
+  ✓  16 [chromium] › e2e/booking.spec.ts:94:1 › 管理员创建布局、添加座位、发布后锁定编辑 (2.0s)
+  ✓  17 [chromium] › e2e/booking.spec.ts:127:1 › 统一登录后管理员可设置禁止预约时间，旧的创建时段接口已移除 (620ms)
 
-  16 passed (21.8s)
+  17 passed (20.1s)
 
-完整验证通过：数据库迁移、种子、类型、规则、并发、生产构建与浏览器流程。
+完整验证通过：数据库初始化、种子、类型、规则、并发、取消通知、生产构建与浏览器流程。

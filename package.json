@@ -7,16 +7,17 @@
     "build": "prisma generate && next build",
     "start": "next start --hostname 0.0.0.0",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate deploy",
+    "db:init": "node --env-file-if-exists=.env scripts/init-db.mjs",
     "db:seed": "node --env-file-if-exists=.env --import tsx prisma/seed.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test --experimental-test-isolation=none tests/rules.test.ts tests/request.test.ts tests/geometry.test.ts",
     "test:e2e": "node --env-file-if-exists=.env node_modules/@playwright/test/cli.js test",
     "test:integration": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/integration.test.ts",
+    "test:notifications": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/cancellation-notification.test.ts",
     "test:database": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/database.test.ts",
     "db:validate": "prisma validate",
     "verify": "node --env-file-if-exists=.env.test scripts/verify.mjs",
-    "test:api": "node --import tsx --test --experimental-test-isolation=none tests/api.test.ts"
+    "test:api": "node --env-file-if-exists=.env --import tsx --test --experimental-test-isolation=none tests/api.test.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.0",

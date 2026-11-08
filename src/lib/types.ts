@@ -1,22 +1,3 @@
-export type Group = {
-    id: string;
-    name: string;
-    canReserve: boolean;
-    weeklyRules: {
-        weekday: number;
-        startMinute: number;
-        endMinute: number;
-    }[];
-    dateRules: {
-        date: string;
-        allowed: boolean;
-        startMinute: number;
-        endMinute: number;
-    }[];
-    _count?: {
-        users: number;
-    };
-};
 export type User = {
     id: string;
     name: string;
@@ -26,8 +7,6 @@ export type User = {
     memberType: 'YSYX' | 'ICIL';
     enabled: boolean;
     deletedAt?: string | null;
-    groupId: string;
-    group: Group;
 };
 export type Element = {
     id: string;
@@ -73,29 +52,11 @@ export type Session = {
     layout: Layout;
     startsAt: string;
     endsAt: string;
-    requiredAssistants: number;
-    open: boolean;
     icilOnly?: boolean;
     cancelledAt?: string | null;
-    allowed: boolean;
-    adminReady: boolean;
-    hasAdminSeat?: boolean;
-    assistantPresent?: boolean;
     staffPresenceWindows?: { startsAt: string; endsAt: string }[];
     bookingBlocked?: boolean;
     bookingBlocks?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string }[];
-    bookingBlock?: { id: string; kind: 'SESSION' | 'DAY'; startsAt: string; endsAt: string; reason: string } | null;
-    sessionBlocked?: boolean;
-    dayBlocked?: boolean;
-    adminBookings: { id: string; adminId: string; admin: { id: string; name: string } }[];
-    coverage: {
-        id: string;
-        assistantId: string;
-        assistant: {
-            id: string;
-            name: string;
-        };
-    }[];
     reservations: {
         id?: string;
         seatId: string;
@@ -103,7 +64,6 @@ export type Session = {
         userId?: string;
         startsAt?: string;
         endsAt?: string;
-        checkedInAt?: string | null;
     }[];
 };
 export type Reservation = {
@@ -115,16 +75,7 @@ export type Reservation = {
     endsAt: string;
     user: User;
     cancelledAt: string | null;
-    checkedInAt: string | null;
     createdAt: string;
-};
-export type Coverage = {
-    id: string;
-    session: Session;
-    assistant?: {
-        name: string;
-        email: string;
-    };
 };
 export type UserNotification = {
     id: string;

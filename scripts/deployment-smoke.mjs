@@ -8,23 +8,23 @@ const browser = await chromium.launch();
 const context = await browser.newContext({ baseURL, ignoreHTTPSErrors: secure });
 try {
     const page = await context.newPage();
-    await page.goto('/login?mode=admin');
+    await page.goto('/login');
     await page.getByLabel('学号').fill(process.env.ADMIN_STUDENT_ID);
     await page.getByLabel('密码').fill(process.env.ADMIN_PASSWORD);
-    await page.getByRole('button', { name: '进入管理后台' }).click();
+    await page.getByRole('button', { name: '登录', exact: true }).click();
     await page.getByRole('heading', { name: /空间管理概览/ }).waitFor();
     const cookie = (await context.cookies()).find(c => c.name === 'station_session');
     assert.ok(cookie?.httpOnly);
     assert.equal(cookie.sameSite, 'Lax');
     assert.equal(cookie.secure, secure);
     assert.equal((await page.request.get('/api/health')).status(), 200);
-    assert.equal((await page.request.post('/api/sessions', { headers: { Origin: 'https://untrusted.example' }, data: {} })).status(), 403);
+    assert.equal((await page.request.post('/api/admin/booking-blocks', { headers: { Origin: 'https://untrusted.example' }, data: {} })).status(), 403);
     await page.goto('/admin');
     await page.getByRole('heading', { name: /空间管理概览/ }).waitFor();
     await mkdir('reports', { recursive: true });
     await page.screenshot({ path: `reports/deployment-${secure ? 'https' : 'http'}.png`, fullPage: true });
-    await page.getByRole('button', { name: '退出登录' }).click();
-    await page.getByRole('heading', { name: /先选择你的入口/ }).waitFor();
+    await page.getByRole('button', { name: '退出登录并返回入口', exact: true }).click();
+    await page.getByRole('heading', { name: /登录预约空间/ }).waitFor();
     assert.equal((await page.request.get('/api/admin/users')).status(), 401);
     console.log(`PASS ${baseURL}: Chromium 登录、管理员页面、健康检查、跨站拒绝、Cookie Secure=${secure}、注销`);
 } finally { await context.close(); await browser.close(); }

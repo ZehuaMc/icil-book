@@ -25,7 +25,10 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://station:station@127.0.0.1:5432/station_test?schema=public
-      SEED_PASSWORD: TestOnly-Station-2026!
+      ADMIN_STUDENT_ID: testadmin
+      ADMIN_PASSWORD: TestOnly-Station-2026!
+      ADMIN_NAME: 测试管理员
+      ADMIN_EMAIL: test-admin@example.local
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
